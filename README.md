@@ -178,6 +178,18 @@ sudo xray-deploy status / restart / uninstall
 > 二者互补——VPS 侧握手快但中国方向被 SNI 阻断的域名，国内用户照样连不上。`fallback-cn-test` 需访问
 > `api.globalping.io`（速率限制 250 次/时，每域名消耗 2 次），故不并入 install 默认流程，按需手动执行。
 
+> **数据出境确认（`fallback-cn-test` 专属）**：Globalping 是第三方公共 API，待测域名会被提交出境并留存在其
+> **公开测量记录**中（提交内容仅域名 + 请求类型，不含服务器 IP / 密钥 / 节点信息）。因此该命令**提交前强制确认，
+> 默认拒绝**——无交互终端（无 TTY）时同样拒绝，不会静默发出任何数据。自动化场景用 `CN_TEST_ASSUME_YES=1` 显式放行：
+
+```bash
+# 交互：会先打印出境提示，输 y 才提交
+sudo xray-deploy fallback-cn-test
+
+# 自动化/CI：显式放行（仅限你确认可出境的域名）
+CN_TEST_ASSUME_YES=1 sudo xray-deploy fallback-cn-test www.example.com
+```
+
 > **客户端兼容性硬约束（Xray ≥ 26.9.8）**：mihomo 默认从 ClientHello 剥离 X25519MLKEM768 扩展，而 Xray 26.9.8+
 > 对不带该扩展的 REALITY 握手直接拒绝（症状：`REALITY authentication failed`、服务端 `accepted=0`）。
 > 本工具生成的 mihomo 片段已自动包含 `support-x25519mlkem768: true`，**勿手工删除**。

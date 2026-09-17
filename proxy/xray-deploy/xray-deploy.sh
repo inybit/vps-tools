@@ -43,7 +43,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.6.1"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1685,6 +1685,8 @@ cmd_fallback_test() {  # $1=可选域名（测单个）；无参 = 测全部候�
 # 实现：Globalping 公共探针 API（中国三网 eyeball 探针），只读检测，不改部署状态。
 # 注意：外部 API，需公网可达；速率限制 250 次/小时，每域名消耗 2 次测量（ping + http）。
 #   故本命令不并入 install/proto_* 默认流程，且无参时只测 tier4（已实测可用）候选。
+# 数据出境：提交前必须经 gp_confirm_egress 显式确认（默认拒绝，无 TTY 亦拒绝；
+#   自动化用 CN_TEST_ASSUME_YES=1 放行）。域名会出境并留存于 Globalping 公开记录。
 GP_API="https://api.globalping.io/v1"
 GP_PROBES="${CN_PROBES:-8}"      # 探针数（中国区上限约 62）
 GP_TIMEOUT="${CN_WAIT:-40}"      # 单次测量最长等待秒数
@@ -1734,6 +1736,26 @@ gp_report() {  # $1=json $2=ping|http → stdout: "通过数/总数 [详情]"；
   return 0
 }
 
+gp_confirm_egress() {  # $@=待提交域名；返回 0=同意，1=取消
+  # 数据出境显式确认（2026-09-17 用户要求）：Globalping 是第三方公共 API，
+  #   域名会被提交出境并留存在其公开测量记录里，必须让用户明确知情后再发。
+  # 默认拒绝（fail-closed）：无 TTY、回车、非 y 一律取消，不提交任何数据。
+  # 自动化场景用 CN_TEST_ASSUME_YES=1 显式放行。
+  local yn
+  log_warn "数据出境提示：本命令将把下列域名提交给第三方服务 Globalping（api.globalping.io）"
+  log_warn "  · 提交内容：域名 + 请求类型（ping / HTTPS GET /），不含服务器 IP、密钥、节点信息"
+  log_warn "  · 执行位置：Globalping 中国三网 eyeball 探针；结果会留存在其公开测量记录中"
+  log_warn "  · 性质：只读检测，不修改本机部署状态"
+  log_warn "  · 待提交域名（${#} 个）：$*"
+  if [[ "${CN_TEST_ASSUME_YES:-0}" == "1" ]]; then
+    log_info "已通过 CN_TEST_ASSUME_YES=1 跳过确认（自动化场景）"
+    return 0
+  fi
+  read_input "确认将上述域名提交至 Globalping 检测？[y/N]: " yn || return 1
+  [[ "${yn,,}" == "y" ]] || return 1
+  return 0
+}
+
 cmd_fallback_cn_test() {  # $1=可选域名（测单个）；无参 = 测 tier4 候选
   local target="${1:-}" dom c t note
   command -v curl >/dev/null 2>&1 || die "需要 curl"
@@ -1752,6 +1774,9 @@ cmd_fallback_cn_test() {  # $1=可选域名（测单个）；无参 = 测 tier4 
   # 去重（候选表可能跨地区重复同一域名）
   local -a uniq_domains=()
   while IFS= read -r dom; do uniq_domains+=("$dom"); done < <(printf '%s\n' "${domains[@]}" | awk '!seen[$0]++')
+
+  gp_confirm_egress "${uniq_domains[@]}" || { log_warn "已取消，未提交任何数据（同意请输 y）"; return 1; }
+  echo >&2
 
   log_info "回落域名中国方向可达性检测（Globalping 中国三网探针）"
   log_info "探针数 ${GP_PROBES}，超时 ${GP_TIMEOUT}s；每域名消耗 2 次测量（限 250/时，本次约 $(( ${#uniq_domains[@]} * 2 )) 次）"
@@ -1808,7 +1833,8 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 -test 校验并重载）
   xray-deploy fallback-test [域名] 测试回落域名握手延迟并排序（无参=全部候选）
   xray-deploy fallback-cn-test [域名] 回落域名中国方向可达性检测（Globalping 探针；无参=全部候选）
-                                    需要外网访问 api.globalping.io；只读检测，不改部署状态
+                                   需要外网访问 api.globalping.io；只读检测，不改部署状态
+                                   **提交前需确认数据出境**（默认拒绝；自动化用 CN_TEST_ASSUME_YES=1）
   sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
   sudo xray-deploy upgrade         升级 Xray 二进制（失败自动回滚）
   sudo xray-deploy status|restart|uninstall
@@ -1890,7 +1916,7 @@ if [[ "$CMD" == "menu" ]]; then
         ;;
       3) cmd_info ;;
       4)
-        echo "  1) 测试全部候选  2) 测试指定域名  3) 中国方向检测(Globalping)"
+        echo "  1) 测试全部候选  2) 测试指定域名  3) 中国方向检测(Globalping，需确认数据出境)"
         read_input "选择 [1-3]: " fc || { log_warn "无交互终端"; continue; }
         case "${fc:-1}" in
           1) cmd_fallback_test ;;
