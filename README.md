@@ -112,6 +112,18 @@ vps-tools/
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl |
 | [docker-install](utils/docker-install/) | utils | Docker 安装（官方源）+ **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker) 接管 DOCKER-USER，固定版本 + sha256 校验）+ 非暴露模式（容器端口仅本机可达）+ 非 root 管理 + 权限体检 | curl, iptables, ufw |
 
+## 测试
+
+```bash
+bash tests/verify-docker-install.sh    # docker-install 回归（50 断言，mock 环境，无需 root/真机）
+```
+
+回归脚本用 PATH stub 模拟 ufw/iptables/ip6tables/systemctl/docker 与上游 ufw-docker，
+覆盖：委托上游的调用契约、sha256 校验 fail-closed、幂等、lockdown 持久化、
+状态判定分支、架构规约（单文件 ≤200 行）、无死代码/无悬空函数。
+
+改工具后**先跑它**；`PASS=n FAIL=0` 才算过。真机验收另见各工具的端到端脚本（需外部主机做视角）。
+
 ## 工具使用教程
 
 ### vnstat-monitor — vnStat 流量监控（Telegram 推送）
