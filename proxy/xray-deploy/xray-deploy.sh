@@ -8,9 +8,11 @@
 #   - 自动识别架构（amd64 / arm64 / armv7l）
 #   - 自动写入自启（systemd / OpenRC）
 #   - 节点信息持久化，随时 info 查看
-#   - 协议可扩展（注册表驱动），默认 VLESS-TCP-XTLS-Vision-REALITY，可选 VLESS-XHTTP-H2-TLS（真实证书落地）
+#   - 协议可扩展（注册表驱动），默认 VLESS-TCP-XTLS-Vision-REALITY，
+#     可选 VLESS-XHTTP-H2-TLS（真实证书落地）/ VLESS-XHTTP-REALITY（XHTTP+REALITY+XMUX）/ Hysteria2
 #   - geosite/geoip 使用 MetaCubeX/meta-rules-dat，每周自动更新
 #   - 回落域名半自动筛选（测试 + 排序 + 确认）
+#   - 回落域名中国方向可达性检测（fallback-cn-test，Globalping 探针，可选）
 #   - 生成 mihomo / sing-box 客户端节点信息
 #   - 服务端 routing（block 广告/BT/私网/国内，google 直连）
 #
@@ -41,7 +43,7 @@
 
 set -euo pipefail
 
-VERSION="1.5.5"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.6.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -320,6 +322,7 @@ FALLBACK_CANDIDATES=(
   "www.archives.gov|US|3|国家档案馆"
   "www.npr.org|US|3|NPR"
   "www.wikipedia.org|US|4|维基百科"
+  "www.cartoonbrew.com|US|4|动画行业媒体（洛杉矶，中国方向 12/12 实测 2026-09-17）"
   # CH
   "www.ethz.ch|CH|3|苏黎世联邦理工"
   "www.epfl.ch|CH|3|洛桑联邦理工"
@@ -357,6 +360,8 @@ FALLBACK_CANDIDATES=(
   "www.tsukuba.ac.jp|JP|3|筑波大学"
   "www.kantei.go.jp|JP|3|首相官邸"
   "www.lovelive-anime.jp|JP|4|实测可用（2026-08-12）"
+  "shin-ei-animation.jp|JP|4|动画制作公司（中国方向 11/12，1 探针 ICMP 失败→备选 2026-09-17）"
+  "www.ritao.co|JP|4|东京企业站（中国方向 12/12 实测 2026-09-17）"
   # HK
   "www.gov.hk|HK|4|香港政府（实测 2026-08-12）"
   "www.info.gov.hk|HK|3|香港政府资讯"
@@ -370,6 +375,7 @@ FALLBACK_CANDIDATES=(
   "www.hkbu.edu.hk|HK|3|香港浸会大学"
   "www.hyd.gov.hk|HK|3|香港渠务署"
   "www.tourism.gov.hk|HK|3|香港旅游事务署"
+  "ani-com.hk|HK|4|香港动画媒体（中国方向 12/12 实测 2026-09-17）"
   # SG
   "www.ntu.edu.sg|SG|4|新加坡南洋理工（实测 2026-08-12）"
   "www.nus.edu.sg|SG|3|新加坡国立大学"
@@ -680,6 +686,7 @@ update_geo() {
 #   3. 在 state.json 的 protocols[] 里存该协议参数
 PROTO_REGISTRY=(
   "vless-reality|VLESS-TCP-XTLS-Vision-REALITY|xray"
+  "vless-xhttp-reality|VLESS-XHTTP-REALITY (XHTTP+XMUX)|xray"
   "vless-xhttp|VLESS-XHTTP-H2-TLS|xray"
   "hysteria2|Hysteria2 (hy2)|xray"
 )
@@ -717,6 +724,9 @@ gen_client_mihomo_vless_reality() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey $
     reality-opts:
       public-key: ${5}
       short-id: ${7}
+      # 必需：mihomo 默认剥离 X25519MLKEM768，Xray >= 26.9.8 对不带该扩展的握手直接拒绝
+      # （症状：REALITY authentication failed / 服务端 accepted=0）
+      support-x25519mlkem768: true
 EOF
 }
 
@@ -830,11 +840,67 @@ EOF
 EOF
 }
 
+gen_client_mihomo_vless_xhttp_reality() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey $6=sni $7=shortid $8=domain(忽略) $9=path
+  cat <<EOF
+  - name: "xray-${1}"
+    type: vless
+    server: ${2}
+    port: ${3}
+    uuid: ${4}
+    network: xhttp
+    udp: true
+    tls: true
+    servername: ${6}
+    client-fingerprint: chrome
+    xhttp-opts:
+      path: ${9}
+      mode: auto
+      reuse-settings:          # = XMUX（仅客户端生效）
+        max-concurrency: "16-32"
+        c-max-reuse-times: "64-128"
+        h-max-request-times: "600-900"
+        h-max-reusable-secs: "1800-3000"
+    reality-opts:
+      public-key: ${5}
+      short-id: ${7}
+      # 必需：mihomo 默认剥离 X25519MLKEM768，Xray >= 26.9.8 对不带该扩展的握手直接拒绝
+      # （症状：REALITY authentication failed / 服务端 accepted=0）
+      support-x25519mlkem768: true
+EOF
+}
+
+gen_client_singbox_vless_xhttp_reality() {  # 同 mihomo 参数顺序
+  # 注意：sing-box 上游不支持 XHTTP，需 sing-box-extended/lx fork（同 vless-xhttp）
+  cat <<EOF
+# sing-box 上游不支持 XHTTP，请使用 sing-box-extended 或 sing-box-lx：
+{
+  "type": "vless",
+  "tag": "xray-${1}",
+  "server": "${2}",
+  "server_port": ${3},
+  "uuid": "${4}",
+  "tls": {
+    "enabled": true,
+    "server_name": "${6}",
+    "utls": { "enabled": true, "fingerprint": "chrome" },
+    "reality": { "enabled": true, "public_key": "${5}", "short_id": "${7}" }
+  },
+  "transport": {
+    "type": "xhttp",
+    "host": "${6}",
+    "path": "${9}",
+    "mode": "auto"
+  }
+}
+EOF
+}
+
 # 生成某协议的客户端片段（按类型分发）
 gen_client_mihomo() {  # $1=type 其余参数透传
   local type="$1"; shift
   case "$type" in
     vless-reality) gen_client_mihomo_vless_reality "$@" ;;
+    vless-xhttp-reality) gen_client_mihomo_vless_xhttp_reality "$@" ;;
     vless-xhttp|vless-h2) gen_client_mihomo_vless_xhttp "$@" ;;
     hysteria2) gen_client_mihomo_hysteria2 "$@" ;;
     *) die "未实现的客户端生成: ${type}" ;;
@@ -845,6 +911,7 @@ gen_client_singbox() {  # $1=type 其余参数透传
   local type="$1"; shift
   case "$type" in
     vless-reality) gen_client_singbox_vless_reality "$@" ;;
+    vless-xhttp-reality) gen_client_singbox_vless_xhttp_reality "$@" ;;
     vless-xhttp|vless-h2) gen_client_singbox_vless_xhttp "$@" ;;
     hysteria2) gen_client_singbox_hysteria2 "$@" ;;
     *) die "未实现的客户端生成: ${type}" ;;
@@ -868,6 +935,24 @@ protocol_to_inbound() {  # $1=协议参数 JSON → 输出 inbound JSON（数组
             show: false, dest: (.sni + ":443"), xver: 0,
             serverNames: [.sni], privateKey: .private_key, shortIds: (.short_ids // [.short_id])
           }
+        },
+        sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
+      }' <<<"$json"
+      ;;
+    vless-xhttp-reality)
+      # VLESS + XHTTP + REALITY + XMUX：无需证书，回落伪装；REALITY 官方支持 RAW/XHTTP/gRPC
+      # mode: auto → 客户端 REALITY 走 stream-one（实测日志确认），服务端 auto 接受三种模式
+      # XMUX 仅客户端生效（服务端写 xmux 无害但无效）→ 服务端不生成 xmux
+      jq '{
+        tag: .name, listen: "0.0.0.0", port: .port, protocol: "vless",
+        settings: { clients: [{ id: .uuid }], decryption: "none" },
+        streamSettings: {
+          network: "xhttp", security: "reality",
+          realitySettings: {
+            show: false, dest: (.sni + ":443"), xver: 0,
+            serverNames: [.sni], privateKey: .private_key, shortIds: (.short_ids // [.short_id])
+          },
+          xhttpSettings: { mode: "auto", path: .path }
         },
         sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
       }' <<<"$json"
@@ -1015,6 +1100,42 @@ proto_wizard_vless_reality() {  # $1=name → 输出 JSON 参数对象
     }'
 }
 
+proto_wizard_vless_xhttp_reality() {  # $1=name → 输出 JSON 参数对象
+  local name="$1" port path uuid keys priv pub sni sid conflict
+  read -r -p "端口 [默认 443]（REALITY 建议 443，非 443 会提高被 GFW 封锁概率）: " port
+  port="${port:-443}"
+  [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge 1 ]] && [[ "$port" -le 65535 ]] || die "无效端口"
+  # 硬约束（2026-09-17 实测）：同端口绑两个 REALITY inbound 时内核按 SO_REUSEPORT 随机分发、
+  # SNI 不参与分流 → 客户端约 30% 概率拿到错误 REALITY 配置，报 "received real certificate"。
+  # 故同端口已有 REALITY 类协议时必须拒绝，而不是靠端口占用检测（xray -test 不绑定端口，测不出）。
+  conflict="$(jq -r --argjson p "$port" \
+    '.protocols[] | select(.port==$p and (.type=="vless-reality" or .type=="vless-xhttp-reality")) | .name' \
+    "$STATE_FILE" 2>/dev/null | head -1 || true)"
+  if [[ -n "$conflict" ]]; then
+    die "端口 ${port} 已被 REALITY 协议 ${conflict} 占用——同端口多 REALITY 会因 SO_REUSEPORT 随机分发导致约 30% 连接串台（实测），请改用其他端口或先删除 ${conflict}"
+  fi
+  port_in_use "$port" && die "端口 ${port} 已被占用"
+  ensure_firewall "$port" tcp
+  path=""
+  read -r -p "XHTTP path [默认 /xray]: " path
+  path="${path:-/xray}"
+  [[ "$path" == /* ]] || die "path 必须以 / 开头"
+  sni="$(select_fallback_domain)" || die "回落域名选择失败"
+  uuid="$(gen_uuid)"
+  keys="$(gen_reality_keys)"
+  priv="${keys%% *}"; pub="${keys##* }"
+  [[ -n "$priv" && -n "$pub" ]] || die "REALITY 密钥生成失败（xray x25519 输出解析异常）"
+  sid="$(gen_short_id)"
+  jq -n --arg name "$name" --argjson port "$port" --arg uuid "$uuid" \
+    --arg priv "$priv" --arg pub "$pub" --arg sni "$sni" --arg sid "$sid" --arg path "$path" '
+    {
+      name: $name, type: "vless-xhttp-reality",
+      port: $port, uuid: $uuid,
+      private_key: $priv, public_key: $pub,
+      sni: $sni, short_id: $sid, short_ids: [$sid], path: $path
+    }'
+}
+
 proto_wizard_vless_xhttp() {  # $1=name → 输出 JSON 参数对象
   local name="$1" port domain path uuid certs cert_file key_file
   read -r -p "端口 [默认 8443]（443 被 REALITY 占用时用独立端口）: " port
@@ -1123,6 +1244,7 @@ proto_add() {
   local params
   case "$type" in
     vless-reality) params="$(proto_wizard_vless_reality "$name")" || die "协议参数生成失败" ;;
+    vless-xhttp-reality) params="$(proto_wizard_vless_xhttp_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp|vless-h2) params="$(proto_wizard_vless_xhttp "$name")" || die "协议参数生成失败" ;;
     hysteria2) params="$(proto_wizard_hysteria2 "$name")" || die "协议参数生成失败" ;;
     *) die "未实现的协议向导: ${type}" ;;
@@ -1174,6 +1296,7 @@ proto_edit() {
     echo "  5) masquerade 伪装 URL（回车清空禁用）"
   else
     echo "  3) 重新生成 UUID"
+    [[ "$type" == "vless-xhttp-reality" ]] && echo "  4) XHTTP path"
   fi
   read -r -p "选择 [1-5]: " sel
   case "${sel:-1}" in
@@ -1185,7 +1308,15 @@ proto_edit() {
         port_in_use "$port" udp && die "端口 ${port}/UDP 已被占用"
         ensure_firewall "$port" udp
       else
+        if [[ "$type" == "vless-reality" || "$type" == "vless-xhttp-reality" ]]; then
+          local pconflict
+          pconflict="$(jq -r --arg n "$name" --argjson p "$port" \
+            '.protocols[] | select(.name!=$n and .port==$p and (.type=="vless-reality" or .type=="vless-xhttp-reality")) | .name' \
+            "$STATE_FILE" 2>/dev/null | head -1 || true)"
+          [[ -z "$pconflict" ]] || die "端口 ${port} 已被 REALITY 协议 ${pconflict} 占用——同端口多 REALITY 会串台（实测 30% 失败率），请换端口"
+        fi
         port_in_use "$port" && die "端口 ${port} 已被占用"
+        ensure_firewall "$port" tcp
       fi
       state_set --arg n "$name" --argjson port "$port" \
         '.protocols = [.protocols[] | if .name==$n then .port=$port else . end]'
@@ -1227,6 +1358,16 @@ proto_edit() {
       fi
       ;;
     4)
+      if [[ "$type" == "vless-xhttp-reality" ]]; then
+        local path
+        read -r -p "新 XHTTP path [当前 $(jq -r --arg n "$name" '.protocols[] | select(.name==$n) | .path' "$STATE_FILE")]: " path
+        [[ "$path" == /* ]] || die "path 必须以 / 开头"
+        state_set --arg n "$name" --arg path "$path" \
+          '.protocols = [.protocols[] | if .name==$n then .path=$path else . end]'
+        log_info "path 已更新为 ${path}（客户端需同步修改 xhttp-opts.path）"
+        rebuild_and_reload
+        return 0
+      fi
       [[ "$type" == "hysteria2" ]] || die "无效选择"
       local brutal_up brutal_down
       read -r -p "BRUTAL 上行带宽（如 100 mbps，回车禁用 BRUTAL）: " brutal_up
@@ -1267,7 +1408,7 @@ proto_edit() {
 
 proto_list_names() {
   log_info "现有协议:"
-  jq -r '.protocols | to_entries[] | "  [\(.key+1)] \(.value.name)  (\(.value.type))  端口 \(.value.port)\(if .value.type == "hysteria2" then "/UDP" else "" end)  \(if (.value.type == "vless-xhttp" or .value.type == "vless-h2") then "域名 " + .value.domain elif .value.type == "hysteria2" then "SNI " + (.value.domain // "-") else "SNI " + .value.sni end)"' "$STATE_FILE"
+  jq -r '.protocols | to_entries[] | "  [\(.key+1)] \(.value.name)  (\(.value.type))  端口 \(.value.port)\(if .value.type == "hysteria2" then "/UDP" else "" end)  \(if (.value.type == "vless-xhttp" or .value.type == "vless-h2") then "域名 " + .value.domain elif .value.type == "hysteria2" then "SNI " + (.value.domain // "-") elif .value.type == "vless-xhttp-reality" then "SNI " + .value.sni + "  path " + .value.path else "SNI " + .value.sni end)"' "$STATE_FILE"
 }
 
 # 解析协议选择：支持序号（[1]）或名称；输出协议 name；找不到 die
@@ -1323,6 +1464,7 @@ cmd_install() {
   local params
   case "$type" in
     vless-reality) params="$(proto_wizard_vless_reality "$name")" || die "协议参数生成失败" ;;
+    vless-xhttp-reality) params="$(proto_wizard_vless_xhttp_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp)   params="$(proto_wizard_vless_xhttp "$name")" || die "协议参数生成失败" ;;
     hysteria2)     params="$(proto_wizard_hysteria2 "$name")" || die "协议参数生成失败" ;;
     *) die "未知协议类型: $type" ;;
@@ -1398,6 +1540,9 @@ cmd_info() {
     fi
     if [[ "$type" == "vless-reality" ]]; then
       echo "SNI: ${sni}"
+    elif [[ "$type" == "vless-xhttp-reality" ]]; then
+      echo "SNI: ${sni}  path: ${path}"
+      echo "传输: XHTTP + REALITY + XMUX（无需证书，回落伪装）"
     elif [[ "$type" == "vless-xhttp" || "$type" == "vless-h2" ]]; then
       echo "域名: ${domain}  path: ${path}"
       echo "证书: ${cert_file}"
@@ -1426,6 +1571,13 @@ cmd_info() {
   echo "  direct: geosite:google"
   echo "  block: geosite:cn"
   echo "  block: geoip:cn"
+  # 版本兼容警告：mihomo 连 Xray >= 26.9.8 的 REALITY 必须显式开 X25519MLKEM768
+  if jq -e '.protocols[] | select(.type=="vless-reality" or .type=="vless-xhttp-reality")' "$STATE_FILE" >/dev/null 2>&1; then
+    echo "----------------------------------------------"
+    echo "⚠ mihomo 客户端：REALITY 节点必须带 support-x25519mlkem768: true"
+    echo "  （上面片段已含；Xray >= 26.9.8 对不带该扩展的握手直接拒绝，症状："
+    echo "   REALITY authentication failed / 服务端 accepted=0。sing-box 不受影响）"
+  fi
   echo "=============================================="
 }
 
@@ -1526,6 +1678,122 @@ cmd_fallback_test() {  # $1=可选域名（测单个）；无参 = 测全部候�
   [[ ${#pass_list[@]} -gt 0 ]]
 }
 
+# ============ 回落域名中国方向可达性检测（Globalping） ============
+# 为什么需要：test_fallback_domain / measure_handshake_ms 都从本机（VPS）视角探测，
+#   测不到中国方向。回落域若被 GFW 阻断（SNI/TLS 层），国内用户首连必失败——
+#   ICMP 通不代表 HTTPS 通，必须发真实 HTTPS 请求才能暴露。
+# 实现：Globalping 公共探针 API（中国三网 eyeball 探针），只读检测，不改部署状态。
+# 注意：外部 API，需公网可达；速率限制 250 次/小时，每域名消耗 2 次测量（ping + http）。
+#   故本命令不并入 install/proto_* 默认流程，且无参时只测 tier4（已实测可用）候选。
+GP_API="https://api.globalping.io/v1"
+GP_PROBES="${CN_PROBES:-8}"      # 探针数（中国区上限约 62）
+GP_TIMEOUT="${CN_WAIT:-40}"      # 单次测量最长等待秒数
+
+gp_submit() {  # $1=ping|http $2=target → 输出 measurement id（失败输出空串）
+  local type="$1" target="$2" body
+  if [[ "$type" == "http" ]]; then
+    body="$(jq -nc --arg t "$target" --argjson n "$GP_PROBES" \
+      '{type:"http",target:$t,locations:[{country:"CN",limit:$n}],measurementOptions:{protocol:"HTTPS",request:{path:"/"}}}')"
+  else
+    body="$(jq -nc --arg t "$target" --argjson n "$GP_PROBES" \
+      '{type:"ping",target:$t,locations:[{country:"CN",limit:$n}],measurementOptions:{packets:3}}')"
+  fi
+  curl -sS --max-time 25 -X POST "${GP_API}/measurements" \
+    -H 'Content-Type: application/json' -d "$body" 2>/dev/null \
+    | jq -r '.id // empty' 2>/dev/null || true
+}
+
+gp_wait() {  # $1=id → 输出结果 JSON（轮询至 finished 或超时）
+  local id="$1" elapsed=0 body=""
+  while [[ $elapsed -lt $GP_TIMEOUT ]]; do
+    body="$(curl -sS --max-time 25 "${GP_API}/measurements/${id}" 2>/dev/null || true)"
+    [[ -n "$body" ]] || break
+    [[ "$(jq -r '.status // ""' <<<"$body" 2>/dev/null || true)" == "finished" ]] && break
+    sleep 3
+    elapsed=$((elapsed + 3))
+  done
+  printf '%s' "$body"
+}
+
+gp_report() {  # $1=json $2=ping|http → stdout: "通过数/总数 [详情]"；返回 1 = 无数据
+  local json="$1" kind="$2" tot ok detail=""
+  tot="$(jq -r '(.results // []) | length' <<<"$json" 2>/dev/null || echo 0)"
+  if [[ "${tot:-0}" -eq 0 ]]; then
+    printf '无探针返回（提交失败/超限/未完成）'
+    return 1
+  fi
+  if [[ "$kind" == "ping" ]]; then
+    ok="$(jq -r '[.results[] | select((.result.status // "") == "finished" and (.result.stats.avg // null) != null)] | length' <<<"$json" 2>/dev/null || echo 0)"
+    detail="$(jq -r '[.results[] | select((.result.status // "") == "finished") | (.result.stats.avg // empty)] | if length > 0 then "平均 RTT " + (((add / length) * 10 | floor) / 10 | tostring) + "ms" else "" end' <<<"$json" 2>/dev/null || true)"
+  else
+    ok="$(jq -r '[.results[] | select((.result.status // "") == "finished" and (.result.headers // null) != null)] | length' <<<"$json" 2>/dev/null || echo 0)"
+    detail="$(jq -r '[.results[].result.statusCode // empty] | unique | map(tostring) | if length > 0 then "HTTP " + join("/") else "" end' <<<"$json" 2>/dev/null || true)"
+  fi
+  printf '%s/%s 通过' "$ok" "$tot"
+  [[ -n "$detail" ]] && printf '（%s）' "$detail"
+  return 0
+}
+
+cmd_fallback_cn_test() {  # $1=可选域名（测单个）；无参 = 测 tier4 候选
+  local target="${1:-}" dom c t note
+  command -v curl >/dev/null 2>&1 || die "需要 curl"
+  command -v jq   >/dev/null 2>&1 || die "需要 jq"
+
+  local -a domains=()
+  if [[ -n "$target" ]]; then
+    domains=("$target")
+  else
+    for line in "${FALLBACK_CANDIDATES[@]}"; do
+      IFS='|' read -r dom c t note <<<"$line"
+      [[ "$t" == "4" ]] && domains+=("$dom")
+    done
+    [[ ${#domains[@]} -gt 0 ]] || die "候选表中无 tier4 域名"
+  fi
+  # 去重（候选表可能跨地区重复同一域名）
+  local -a uniq_domains=()
+  while IFS= read -r dom; do uniq_domains+=("$dom"); done < <(printf '%s\n' "${domains[@]}" | awk '!seen[$0]++')
+
+  log_info "回落域名中国方向可达性检测（Globalping 中国三网探针）"
+  log_info "探针数 ${GP_PROBES}，超时 ${GP_TIMEOUT}s；每域名消耗 2 次测量（限 250/时，本次约 $(( ${#uniq_domains[@]} * 2 )) 次）"
+  log_info "判据：HTTPS 通过率高 = 可作 REALITY 回落；HTTPS 低而 ICMP 高 = 存在 SNI/TLS 阻断"
+  echo >&2
+
+  local -a rows=()
+  local ok_http=0
+  for dom in "${uniq_domains[@]}"; do
+    local id_icmp id_http icmp_res http_res
+    log_info "→ ${dom} 探测中..."
+    id_icmp="$(gp_submit ping "$dom")"
+    if [[ -z "$id_icmp" ]]; then
+      icmp_res="提交失败（网络/限流）"
+    else
+      icmp_res="$(gp_report "$(gp_wait "$id_icmp")" ping || true)"
+    fi
+    id_http="$(gp_submit http "$dom")"
+    if [[ -z "$id_http" ]]; then
+      http_res="提交失败（网络/限流）"
+    else
+      http_res="$(gp_report "$(gp_wait "$id_http")" http || true)"
+    fi
+    log_info "  ICMP: ${icmp_res}"
+    log_info "  HTTPS: ${http_res}"
+    rows+=("${dom}|${icmp_res}|${http_res}")
+    [[ "$http_res" =~ ^([0-9]+)/([0-9]+) ]] && [[ "${BASH_REMATCH[2]}" -gt 0 ]] && \
+      [[ $(( BASH_REMATCH[1] * 100 / BASH_REMATCH[2] )) -ge 80 ]] && ok_http=$((ok_http + 1))
+    echo >&2
+  done
+
+  log_info "汇总（HTTPS ≥80% 视为中国方向可用）:"
+  local row rdom ricmp rhttp
+  for row in "${rows[@]}"; do
+    IFS='|' read -r rdom ricmp rhttp <<<"$row"
+    log_info "  ${rdom}  ICMP: ${ricmp}  HTTPS: ${rhttp}"
+  done
+  log_info "结论：${ok_http}/${#uniq_domains[@]} 个域名 HTTPS 通过率 ≥80%"
+  log_info "提示：结果仅代表本次探针采样；入库前仍应在 VPS 上 fallback-test 复核握手延迟"
+  [[ "$ok_http" -gt 0 ]]
+}
+
 # ============ 子命令分发 ============
 CMD="${1:-menu}"
 case "$CMD" in
@@ -1539,26 +1807,40 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   xray-deploy info                 查看节点信息（明文 + 客户端配置片段）
   xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 -test 校验并重载）
   xray-deploy fallback-test [域名] 测试回落域名握手延迟并排序（无参=全部候选）
+  xray-deploy fallback-cn-test [域名] 回落域名中国方向可达性检测（Globalping 探针；无参=全部候选）
+                                    需要外网访问 api.globalping.io；只读检测，不改部署状态
   sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
   sudo xray-deploy upgrade         升级 Xray 二进制（失败自动回滚）
   sudo xray-deploy status|restart|uninstall
-  sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp / hysteria2）
+  sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / hysteria2）
   xray-deploy -v, --version        显示版本号
   xray-deploy -h, --help           显示本帮助
 
 协议说明:
   vless-reality  VLESS-TCP-XTLS-Vision-REALITY（默认，无需证书，回落伪装）
+  vless-xhttp-reality
+                 VLESS-XHTTP-REALITY（XHTTP + REALITY + XMUX；无需证书，回落伪装）
+                 相对 vless-reality 的优势：XHTTP 走 HTTP 语义（REALITY 下 mode=auto → stream-one），
+                 配合 XMUX 多路复用降低连接数；适合 REALITY 下需要更好抗封锁/复用场景
+                 约束：① 同端口不可再放第二个 REALITY inbound（SO_REUSEPORT 随机分发，实测 30% 串台）
+                       ② mihomo 客户端必须带 support-x25519mlkem768: true（脚本生成的片段已含）
   vless-xhttp    VLESS-XHTTP-H2-TLS（真实证书落地，域名需解析到本机；证书可已有路径/acme.sh 自动签发/自签）
                  Xray 26.x 起 h2 transport 迁移至 XHTTP stream-up（HTTP/2）；mihomo 需 v1.19.23+，sing-box 需 extended/lx fork
                  （旧名 vless-h2 兼容，1.3.0 起统一为 vless-xhttp）
   hysteria2      Hysteria2 (hy2)（QUIC/UDP，官方默认端口 443 模拟 HTTP/3；自签证书+客户端 insecure，无需 CF token）
                  TCP/UDP 端口独立：与 REALITY 的 TCP 443 可共存；UDP 端口被占时向导会提示是否卸载冲突协议
+
+客户端兼容性:
+  mihomo 连 Xray >= 26.9.8 的 REALITY 必须显式 support-x25519mlkem768: true
+  （mihomo 默认剥离 X25519MLKEM768，Xray 对不带该扩展的握手直接拒绝；
+    症状 REALITY authentication failed / 服务端 accepted=0。sing-box 不受影响）
 EOF
       exit 0 ;;
   install)       cmd_install ;;
   info)          cmd_info ;;
   config)        cmd_config "${2:-show}" ;;
   fallback-test) cmd_fallback_test "${2:-}" ;;
+  fallback-cn-test) cmd_fallback_cn_test "${2:-}" ;;
   update-geo)    update_geo "${2:-}" ;;
   upgrade)       cmd_upgrade ;;
   status)        need_root; service_status ;;
@@ -1574,7 +1856,7 @@ EOF
     esac
     ;;
   menu) : ;;  # 走交互菜单
-  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/update-geo/upgrade/status/restart/uninstall/protocol）" ;;
+  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/update-geo/upgrade/status/restart/uninstall/protocol）" ;;
 esac
 
 # ============ 交互菜单 ============
@@ -1608,13 +1890,17 @@ if [[ "$CMD" == "menu" ]]; then
         ;;
       3) cmd_info ;;
       4)
-        echo "  1) 测试全部候选  2) 测试指定域名"
-        read_input "选择 [1-2]: " fc || { log_warn "无交互终端"; continue; }
+        echo "  1) 测试全部候选  2) 测试指定域名  3) 中国方向检测(Globalping)"
+        read_input "选择 [1-3]: " fc || { log_warn "无交互终端"; continue; }
         case "${fc:-1}" in
           1) cmd_fallback_test ;;
           2)
             read_input "输入要测试的域名: " fdom || { log_warn "无交互终端"; continue; }
             cmd_fallback_test "$fdom"
+            ;;
+          3)
+            read_input "输入要检测的域名（回车=全部 tier4 候选）: " fdom || { log_warn "无交互终端"; continue; }
+            cmd_fallback_cn_test "$fdom"
             ;;
           *) log_warn "无效选择" ;;
         esac

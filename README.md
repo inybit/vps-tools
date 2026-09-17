@@ -103,7 +103,7 @@ vps-tools/
 | 工具 | 分类 | 用途 | 依赖 |
 |---|---|---|---|
 | [vnstat-monitor](monitor/vnstat-monitor/) | monitor | vnStat + Telegram 流量监控：进度条/偏移校准/熔断关机/无限流量模式；原地更新消息防刷屏（2026-08-08 修复孤儿卡片：错误分类+原子写状态） | vnstat, jq, curl, gawk, iproute2 |
-| [xray-deploy](proxy/xray-deploy/) | proxy | Xray 一键部署：交互菜单/子命令双模式；协议注册表可扩展（VLESS-TCP-XTLS-Vision-REALITY 默认 / VLESS-XHTTP-H2-TLS / Hysteria2 hy2）；回落域名半自动筛选；MetaCubeX geosite/geoip 每周自动更新；生成 mihomo/sing-box 客户端节点；服务端 routing 防国内访问 | curl, unzip, jq, openssl |
+| [xray-deploy](proxy/xray-deploy/) | proxy | Xray 一键部署：交互菜单/子命令双模式；协议注册表可扩展（VLESS-TCP-XTLS-Vision-REALITY 默认 / VLESS-XHTTP-REALITY 含 XMUX / VLESS-XHTTP-H2-TLS / Hysteria2 hy2）；回落域名半自动筛选（VPS 侧握手 + Globalping 中国方向可达性双检）；MetaCubeX geosite/geoip 每周自动更新；生成 mihomo/sing-box 客户端节点；服务端 routing 防国内访问 | curl, unzip, jq, openssl |
 | [vps-init](utils/vps-init/) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 普通用户+sudo / SSH 密钥+随机高位端口+禁密码 / Fail2Ban / UFW；模块化 lib/ + 模板渲染 | curl, openssh-server |
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl |
 
@@ -150,11 +150,22 @@ xray-deploy config show        # 查看服务端 config.json
 sudo xray-deploy config edit   # 编辑 config.json（保存后自动 xray -test 校验并重载）
 xray-deploy fallback-test      # 测试全部回落候选的握手延迟并排序（部署前选型/诊断用）
 xray-deploy fallback-test www.example.com   # 测试指定域名是否可作回落
+xray-deploy fallback-cn-test   # 回落域名**中国方向**可达性检测（Globalping 中国三网探针，需外网）
+xray-deploy fallback-cn-test www.example.com   # 检测单个域名的中国方向 ICMP/HTTPS 通过率
 sudo xray-deploy update-geo    # 手动更新 geosite/geoip（如需自动更新，可自行配 systemd timer）
 sudo xray-deploy upgrade       # 升级 Xray 二进制（失败自动回滚）
 sudo xray-deploy protocol add/remove/edit/list   # 多协议管理（端口/SNI/UUID）
 sudo xray-deploy status / restart / uninstall
 ```
+
+协议支持（`protocol add` 可选类型）：
+
+| 类型 | 说明 | 证书 | 备注 |
+|---|---|---|---|
+| `vless-reality`（默认） | VLESS-TCP-XTLS-Vision-REALITY | 无需 | 成熟稳定，TCP 性能好 |
+| `vless-xhttp-reality` | VLESS-XHTTP-REALITY（含 XMUX） | 无需 | 抗封锁更强；**仅支持 mihomo 系客户端**（sing-box 上游无 XHTTP） |
+| `vless-xhttp` | VLESS-XHTTP-H2-TLS | 需域名解析到本机 | 走真实证书，兼容性最广 |
+| `hysteria2` | Hysteria2 (hy2, QUIC/UDP) | 需域名 | 弱网/高丢包环境优势 |
 
 部署流程：
 1. `sudo xray-deploy` → 选 1 安装：按提示选端口（默认 443）、回落域名（自动测试+排序，可输自有域名）。
@@ -162,6 +173,15 @@ sudo xray-deploy status / restart / uninstall
 3. 节点信息持久化在 `/etc/xray-deploy/state.json`（600 权限，含私钥，**勿外泄**）。
 
 > 回落域名测试在 VPS 上实时进行（TLS1.3 + H2 + X25519 + 非跳转 + 非 Cloudflare）；若全部失败会干净退出，不会产生半成品。
+
+> **回落域名两个方向都要测**：`fallback-test` 从 VPS 侧测握手延迟；`fallback-cn-test` 从中国三网探针侧测可达性。
+> 二者互补——VPS 侧握手快但中国方向被 SNI 阻断的域名，国内用户照样连不上。`fallback-cn-test` 需访问
+> `api.globalping.io`（速率限制 250 次/时，每域名消耗 2 次），故不并入 install 默认流程，按需手动执行。
+
+> **客户端兼容性硬约束（Xray ≥ 26.9.8）**：mihomo 默认从 ClientHello 剥离 X25519MLKEM768 扩展，而 Xray 26.9.8+
+> 对不带该扩展的 REALITY 握手直接拒绝（症状：`REALITY authentication failed`、服务端 `accepted=0`）。
+> 本工具生成的 mihomo 片段已自动包含 `support-x25519mlkem768: true`，**勿手工删除**。
+> 反事实实测：带该字段 HTTP 200，删除后连接失败。
 
 ### vps-init — 一键初始化 VPS
 
