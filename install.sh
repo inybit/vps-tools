@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.3.0"
+VPS_TOOLS_VERSION="1.4.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -61,6 +61,7 @@ TOOLS=(
   "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||0|"
   "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env|0|utils/vps-init/lib/common.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl"
   "vps-bench|bench/vps-bench/vps-bench.sh|||0|"
+  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env|1|utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/render.sh utils/docker-install/templates/ufw-docker-block.rules.tpl"
 )
 
 # ============ 辅助函数 ============

@@ -83,12 +83,17 @@ vps-tools/
 ├── proxy/              # 代理类（xray/sing-box 等辅助脚本）
 │   └── xray-deploy/
 │       └── xray-deploy.sh
-├── utils/              # 通用工具（DDNS/证书/初始化等）
-│   └── vps-init/
-│       ├── vps-init.sh              # 一键初始化 VPS（入口）
-│       ├── lib/                     # 模块拆分（common/dd/system/user/ssh/ufw/fail2ban）
-│       ├── templates/               # sshd drop-in / fail2ban jail.local 模板
-│       └── vps-init.env.example
+├── utils/              # 通用工具（DDNS/证书/初始化/容器运行时等）
+│   ├── vps-init/
+│   │   ├── vps-init.sh              # 一键初始化 VPS（入口）
+│   │   ├── lib/                     # 模块拆分（common/dd/system/user/ssh/ufw/fail2ban）
+│   │   ├── templates/               # sshd drop-in / fail2ban jail.local 模板
+│   │   └── vps-init.env.example
+│   └── docker-install/              # Docker 安装 + UFW 共存加固 + 非 root 管理（2026-09-17）
+│       ├── docker-install.sh        # 入口：向导 + 子命令分发
+│       ├── lib/                     # common/render/install/firewall/firewall-rules/access/usage
+│       ├── templates/               # ufw-docker-block.rules.tpl（DOCKER-USER 规则块）
+│       └── docker-install.env.example
 ├── bench/              # 测试类（测速/基准）
 │   └── vps-bench/
 │       └── vps-bench.sh
@@ -106,6 +111,7 @@ vps-tools/
 | [xray-deploy](proxy/xray-deploy/) | proxy | Xray 一键部署：交互菜单/子命令双模式；协议注册表可扩展（VLESS-TCP-XTLS-Vision-REALITY 默认 / VLESS-XHTTP-REALITY 含 XMUX / VLESS-XHTTP-H2-TLS / Hysteria2 hy2）；回落域名半自动筛选（VPS 侧握手 + Globalping 中国方向可达性双检）；MetaCubeX geosite/geoip 每周自动更新；生成 mihomo/sing-box 客户端节点；服务端 routing 防国内访问 | curl, unzip, jq, openssl |
 | [vps-init](utils/vps-init/) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 普通用户+sudo / SSH 密钥+随机高位端口+禁密码 / Fail2Ban / UFW；模块化 lib/ + 模板渲染 | curl, openssh-server |
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl |
+| [docker-install](utils/docker-install/) | utils | Docker 安装（官方源）+ **Docker×UFW 共存加固**（DOCKER-USER 接管，防发布端口绕过防火墙）+ 非 root 管理（docker 组/rootless 提示）+ 权限体检（socket/`~/.docker`/bind mount 属主漂移） | curl, iptables, ufw |
 
 ## 工具使用教程
 
@@ -235,6 +241,35 @@ sudo vps-bench tcpquality    # TcpQuality 测速
 ```
 
 > 第三方脚本以管道方式执行（供应链风险），执行前显示来源 URL 并确认。
+
+### docker-install — Docker 安装 + UFW 共存加固
+
+**为什么需要它**：Docker 通过 `nat` 表 DNAT 转发已发布端口，数据包在到达 ufw 的
+`INPUT/OUTPUT` 链**之前**就被处理 —— 所以 `ufw allow 8080` 对 `-p 8080:80` 的容器
+**完全无效**，端口照样暴露公网。唯一官方入口是 `DOCKER-USER` 链（在 Docker 自身规则前执行）。
+
+```bash
+sudo docker-install                  # 向导：安装 → 检测 → 加固 → 放行 → 用户组 → 权限检查
+sudo docker-install firewall status  # 只读检测：是否绕过 + 列出当前公网可达端口
+sudo docker-install firewall fix     # 加固（幂等，可重复执行）
+sudo docker-install firewall allow 80  # 放行公网访问容器端口 80
+sudo docker-install firewall deny 80   # 撤销
+sudo docker-install firewall uninstall # 还原（移除规则块）
+
+sudo docker-install user admin       # admin 加入 docker 组（非 root 管理 docker）
+sudo docker-install perms check      # 检查 socket / 配置目录 / bind mount 属主
+sudo docker-install perms fix /srv/docker/app   # 修正指定路径属主（必须显式指定）
+sudo docker-install status           # 汇总状态
+```
+
+关键点：
+
+- **放行匹配的是容器内部端口**，不是 `-p` 的宿主映射端口（`ufw route allow ... port 80`）
+- 加固后判定状态**读内核实际规则**（`iptables -S DOCKER-USER`）复核，不读文件、不信命令回显
+- 规则块沿用 `# BEGIN UFW AND DOCKER` 标记 → 与 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker) **互认**，已装该工具的机器可直接接管（幂等：先删旧块再追加）
+- 检测到 **Docker nftables 后端**（实验性，无 `DOCKER-USER` 链）时**拒绝自动加固**，只给手工路径
+- `docker` 组成员**等价于 root**（可 `-v /:/host`），工具会显式告警；多人机器建议 rootless
+- `perms` 默认只 check；`fix` 必须显式指定路径，**不做全盘 chown**
 
 ## 安全约定
 
