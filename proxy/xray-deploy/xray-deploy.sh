@@ -43,7 +43,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.1"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.6.2"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,12 +70,19 @@ die() { log_err "$*"; exit 1; }
 # ============ 交互输入 ============
 # 管道方式（curl | sudo bash -s --）下 stdin 被 curl 占用，改从 /dev/tty 读取。
 # 返回 1 = 无交互终端（纯 CI/脚本场景）。
+# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
+# 无控制终端时同样返回真，直接 read 会报 "/dev/tty: No such device or address"
+# （2026-09-18 真机实测）。判据必须是「真打开一次」。
+has_ctty() { { : < /dev/tty; } 2>/dev/null; }
+
 read_input() {  # $1=提示 $2=变量名；返回 1 = 无交互终端
   local _rc=0
   if [[ -t 0 ]]; then
     read -r -p "$1" "$2" || _rc=1
-  elif [[ -r /dev/tty ]] 2>/dev/null; then
-    read -r -p "$1" "$2" < /dev/tty || _rc=1
+  elif has_ctty; then
+    printf '%s' "$1" >&2
+    # ⚠️ 2>/dev/null 必须在 < /dev/tty 之前（顺序反了报错会漏到 stderr）
+    read -r "$2" 2>/dev/null < /dev/tty || _rc=1
   else
     _rc=1
   fi

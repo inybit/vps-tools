@@ -11,7 +11,7 @@
 # ⚠️ 第三方脚本以 curl | sudo bash 方式执行，存在供应链风险：
 #    执行前会显示来源 URL，交互模式需确认。
 
-VPS_BENCH_VERSION="1.0.0"
+VPS_BENCH_VERSION="1.0.1"
 
 NODEQUALITY_URL="https://run.NodeQuality.com"
 TCPQUALITY_URL="https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh"
@@ -19,11 +19,20 @@ TCPQUALITY_URL="https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQ
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $*" >&2; }
 log_warn() { echo -e "\033[0;33m[WARN]\033[0m $*" >&2; }
 
+# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
+# 无控制终端时同样返回真，直接 read 会报 "/dev/tty: No such device or address"
+# （2026-09-18 真机实测）。判据必须是「真打开一次」。
+has_ctty() { { : < /dev/tty; } 2>/dev/null; }
+
 # 交互确认（无 TTY 直接执行，不阻塞管道场景）
 confirm() {
   local ans=""
-  if [[ -t 0 ]] || [[ -r /dev/tty ]] 2>/dev/null; then
-    if [[ -t 0 ]]; then read -r -p "$1 [y/N] " ans; else read -r -p "$1 [y/N] " ans < /dev/tty; fi
+  if [[ -t 0 ]]; then
+    read -r -p "$1 [y/N] " ans
+    [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]
+  elif has_ctty; then
+    printf '%s [y/N] ' "$1" >&2
+    read -r ans 2>/dev/null < /dev/tty
     [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]
   else
     return 0
@@ -70,7 +79,7 @@ main() {
       echo "  2) TcpQuality"
       echo "  0) 退出"
       local sel=""
-      if [[ -t 0 ]]; then read -r -p "选择 [0-2]: " sel; elif [[ -r /dev/tty ]] 2>/dev/null; then read -r -p "选择 [0-2]: " sel < /dev/tty; fi
+      if [[ -t 0 ]]; then read -r -p "选择 [0-2]: " sel; elif has_ctty; then printf '选择 [0-2]: ' >&2; read -r sel 2>/dev/null < /dev/tty; fi
       case "$sel" in
         1) run_nodequality ;;
         2) run_tcpquality ;;

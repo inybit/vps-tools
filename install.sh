@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.6.0"
+VPS_TOOLS_VERSION="1.6.1"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -192,7 +192,7 @@ EOF
   # 仅初次安装 / 卸载重装（env 新生成）触发交互；更新（env 已存在）保留原配置
   if [[ "$setup_flag" == "1" ]]; then
     if [[ "$env_was_created" == "1" ]]; then
-      if [[ -t 0 ]] || [[ -r /dev/tty ]] 2>/dev/null; then
+      if has_ctty; then
         log_info "${name} 首次安装，进入交互式配置（触发频率等）"
         "${CMD_DIR}/${name}" setup
       else
@@ -233,12 +233,19 @@ uninstall_tool() {  # $1=tool line
 # ============ 交互输入 ============
 # 管道方式（curl | sudo bash -s --）下 stdin 被 curl 占用，改从 /dev/tty 读取。
 # 返回 1 = 无交互终端（纯 CI/脚本场景）。
+# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
+# 无控制终端时同样返回真，直接 read 会报 "/dev/tty: No such device or address"
+# （2026-09-18 真机实测）。判据必须是「真打开一次」。
+has_ctty() { { : < /dev/tty; } 2>/dev/null; }
+
 read_input() {  # $1=提示 $2=变量名；返回 1 = 无交互终端
   local _rc=0
   if [[ -t 0 ]]; then
     read -r -p "$1" "$2" || _rc=1
-  elif [[ -r /dev/tty ]] 2>/dev/null; then
-    read -r -p "$1" "$2" < /dev/tty || _rc=1
+  elif has_ctty; then
+    printf '%s' "$1" >&2
+    # ⚠️ 2>/dev/null 必须在 < /dev/tty 之前（顺序反了报错会漏到 stderr）
+    read -r "$2" 2>/dev/null < /dev/tty || _rc=1
   else
     _rc=1
   fi
@@ -374,7 +381,7 @@ EOF
         else
           log_err "未知工具: ${tool}"; list_tools; return 1
         fi
-      elif [[ "$action" == "install" ]] && ( [[ -t 0 ]] || [[ -r /dev/tty ]] ); then
+      elif [[ "$action" == "install" ]] && ( [[ -t 0 ]] || has_ctty ); then
         # 无参 + 可交互 → 交互式选择（不静默装全部）
         pick_tools_menu install
       else

@@ -464,6 +464,28 @@ chk "无 apk 时选 apt-get"         "[[ \"\$PRIO2\" == 'apt-get' ]]"
 BADMGR="$(grep -lE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' \
           "${REPO}"/utils/*/lib/common.sh "${REPO}"/web/*/lib/common.sh 2>/dev/null | tr '\n' ' ')"
 chk "全仓库无「最后命中赢」写法"  "[[ -z \"\$BADMGR\" ]]"
+# 交互终端判据：`[[ -r /dev/tty ]]` 是**权限位判定**，无控制终端时同样为真 →
+# 直接 read 报 "/dev/tty: No such device or address"（2026-09-18 真机实测）。
+# 全仓库必须统一用 has_ctty()（真打开一次）。只扫非注释行（说明文字里会引用旧写法）。
+TTYGUARD="$(grep -rlE '^[[:space:]]*[^#[:space:]].*\[\[ *-r +/dev/tty *\]\]' \
+            "${REPO}"/utils/*/lib/common.sh "${REPO}"/web/*/lib/common.sh \
+            "${REPO}"/bench/*/*.sh "${REPO}"/monitor/*/*.sh \
+            "${REPO}"/proxy/*/*.sh "${REPO}"/install.sh 2>/dev/null | tr '\n' ' ')"
+chk "全仓库无「-r /dev/tty」伪判据" "[[ -z \"\$TTYGUARD\" ]]"
+# 行为断言：无控制终端（setsid 脱离 ctty）时 has_ctty 必须为假、read_input 不得有 stderr 噪音。
+# ⚠️ 必须用脚本文件而非嵌套 bash -c：嵌套引号下 source 路径会被吃掉，
+#    函数找不到 → has_ctty 失败同样输出 0，断言假 PASS（本次自伤一次）。
+cat > "${TMP}/ttyprobe.sh" <<'PROBE'
+source "$1/lib/common.sh" 2>/dev/null
+declare -F read_input >/dev/null 2>&1 && printf 'src=ok ' || printf 'src=BROKEN '
+printf 'has_ctty=%s ' "$(has_ctty && echo 1 || echo 0)"
+err="$( { read_input "p> " _a; } 2>&1 >/dev/null )"
+printf 'stderr=[%s]' "$err"
+PROBE
+TTYPROBE="$(NI_ENV_FILE="${TMP}/none.env" setsid bash "${TMP}/ttyprobe.sh" "$TOOL_DIR" </dev/null 2>/dev/null)"
+chk "探测脚本真的 source 到了库" "echo \"\$TTYPROBE\" | grep -q 'src=ok'"
+chk "无终端时 has_ctty=0"        "echo \"\$TTYPROBE\" | grep -q 'has_ctty=0'"
+chk "无终端时 read_input 无噪音"  "echo \"\$TTYPROBE\" | grep -q 'stderr=\[\]'"
 echo ""
 
 echo "============================================================"

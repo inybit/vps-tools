@@ -12,7 +12,7 @@
 # 依据: https://nginx.org/en/linux_packages.html
 # 铁律: 签名密钥校验不过 → 拒绝安装（fail-closed，不落盘不装包）
 
-NI_VERSION="1.0.0"
+NI_VERSION="1.0.1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

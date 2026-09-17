@@ -19,7 +19,7 @@
 # 配置: /etc/docker-install.env（可缺省）
 # 铁律: 报成功前必须读内核实际规则复核（iptables -S DOCKER-USER），不看文件
 
-DI_VERSION="1.1.0"
+DI_VERSION="1.1.1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

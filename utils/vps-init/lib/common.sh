@@ -46,13 +46,20 @@ load_env() {
   : "${VPS_INIT_YES:=0}"
 }
 
+# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
+# 无控制终端时同样返回真，直接 read 会报 "/dev/tty: No such device or address"
+# （2026-09-18 真机实测）。判据必须是「真打开一次」。
+has_ctty() { { : < /dev/tty; } 2>/dev/null; }
+
 # ---------- 交互输入（stdin 被占用时从 /dev/tty 读；返回 1 = 无交互终端） ----------
 read_input() {  # $1=提示 $2=变量名
   local _rc=0
   if [[ -t 0 ]]; then
     read -r -p "$1" "$2" || _rc=1
-  elif [[ -r /dev/tty ]] 2>/dev/null; then
-    read -r -p "$1" "$2" < /dev/tty || _rc=1
+  elif has_ctty; then
+    printf '%s' "$1" >&2
+    # ⚠️ 2>/dev/null 必须在 < /dev/tty 之前（顺序反了报错会漏到 stderr）
+    read -r "$2" 2>/dev/null < /dev/tty || _rc=1
   else
     _rc=1
   fi

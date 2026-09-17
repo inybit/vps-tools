@@ -14,7 +14,7 @@
 #   vnstat-monitor -v, --version   # 显示版本号
 #   vnstat-monitor -h, --help      # 显示用法（同 help）
 
-VERSION="1.1.1"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.1.2"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ systemd timer 管理（替代 crontab） ============
 # 用法见文件头。设计：频率持久化到 /etc/vnstat-monitor.env 的 INTERVAL_MINUTES，
@@ -152,8 +152,8 @@ prompt_value() {  # $1=提示 $2=当前值 $3=默认值；stdout=最终值
   fi
   if [[ -t 0 ]]; then
     read -r ans
-  elif [[ -r /dev/tty ]] 2>/dev/null; then
-    read -r ans < /dev/tty
+  elif has_ctty; then
+    read -r ans 2>/dev/null < /dev/tty
   else
     ans=""
   fi
@@ -247,13 +247,19 @@ interactive_config() {  # 返回 0
   cfg_set INTERVAL_MINUTES "$v"
 }
 
+# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
+# 无控制终端时同样返回真，直接 read 会报 "/dev/tty: No such device or address"
+# （2026-09-18 真机实测）。判据必须是「真打开一次」。
+has_ctty() { { : < /dev/tty; } 2>/dev/null; }
+
 # 读取交互输入到 TOKEN_ANS（兼容管道安装 /dev/tty）
+# ⚠️ 判据用 has_ctty（真打开一次）而非 [[ -r /dev/tty ]]（权限位判定，无控制终端也返回真）
 read_token() {
   TOKEN_ANS=""
   if [[ -t 0 ]]; then
     read -r TOKEN_ANS
-  elif [[ -r /dev/tty ]] 2>/dev/null; then
-    read -r TOKEN_ANS < /dev/tty
+  elif has_ctty; then
+    read -r TOKEN_ANS 2>/dev/null < /dev/tty
   fi
 }
 # 提示语输出到 stderr（防 $(...) 捕获污染——TOKEN_ANS 用全局变量不涉及，但提示本身应到终端）

@@ -16,7 +16,7 @@
 # 配置: /etc/vps-init.env（可缺省；向导交互输入，非交互/预填用环境变量）
 # 状态: /etc/vps-init/done.<step>（幂等：已完成的步骤跳过）
 
-VPS_INIT_VERSION="1.0.0"
+VPS_INIT_VERSION="1.0.1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
