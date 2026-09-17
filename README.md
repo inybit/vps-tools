@@ -83,6 +83,11 @@ vps-tools/
 ├── proxy/              # 代理类（xray/sing-box 等辅助脚本）
 │   └── xray-deploy/
 │       └── xray-deploy.sh
+├── web/                # Web 服务类（站点网关）
+│   └── nginx-install/               # nginx 官方源安装 + 体检（2026-09-18）
+│       ├── nginx-install.sh         # 入口：向导 + 子命令分发
+│       ├── lib/                     # common/keys/repo/install/status/usage
+│       └── nginx-install.env.example
 ├── utils/              # 通用工具（DDNS/证书/初始化/容器运行时等）
 │   ├── vps-init/
 │   │   ├── vps-init.sh              # 一键初始化 VPS（入口）
@@ -111,6 +116,7 @@ vps-tools/
 | [vps-init](utils/vps-init/) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 普通用户+sudo / SSH 密钥+随机高位端口+禁密码 / Fail2Ban / UFW；模块化 lib/ + 模板渲染 | curl, openssh-server |
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl |
 | [docker-install](utils/docker-install/) | utils | Docker 安装（官方源）+ **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker) 接管 DOCKER-USER，固定版本 + sha256 校验）+ 非暴露模式（容器端口仅本机可达）+ 非 root 管理 + 权限体检 | curl, iptables, ufw |
+| [nginx-install](web/nginx-install/) | web | nginx 官方源安装（stable/mainline 可选）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 公钥摘要）+ apt Pin-Priority 900 + 体检（官方源/服务/配置语法/监听端口/Docker 联动） | curl, gnupg/openssl, apt/dnf/apk |
 
 ## 测试
 
@@ -277,3 +283,29 @@ sudo docker-install firewall uninstall # 卸载加固（ufw-docker uninstall + �
 
 注意：`allow` 的端口是**容器内部端口**（不是 `-p` 的宿主端口），且**按容器绑定**
 （容器重建换 IP 后需重新 allow，这是上游语义）。
+
+### nginx-install — nginx 官方源安装
+
+发行版仓库的 nginx 版本普遍落后，本工具按 [nginx.org 官方文档](https://nginx.org/en/linux_packages.html)
+配置官方仓库并安装，**签名密钥校验不过直接拒绝安装**（fail-closed，不落盘不装包）。
+
+```bash
+sudo nginx-install                      # 向导：检测 → 选通道 → 安装 → 启用 → 体检
+sudo nginx-install install              # 安装/升级 stable
+sudo nginx-install install mainline     # 安装/升级 mainline
+nginx-install status                    # 体检（只读，无需 root）
+```
+
+**安全契约**（三条，均有真机/实测支撑）：
+
+1. **签名密钥校验 fail-closed** —— apt 密钥环必须包含官方指纹
+   `573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62`；apk 公钥 DER 摘要必须等于官方值。
+   校验不通过 → 报错退出，**密钥不落盘、包不安装**。
+2. **apt Pin-Priority 900** —— 不设的话发行版仓库的同名包优先级更高，官方源装了等于没装。
+3. **幂等** —— 重复执行 = 覆盖更新；仓库文件内容不变则不重写（不制造无谓 mtime 变化）。
+
+通道（stable / mainline）写入 `/etc/nginx-install.env` 的 `NI_CHANNEL`；留空则向导询问（回车默认 stable）。
+
+**站点配置不在本工具范围**：安装后手工写 `/etc/nginx/conf.d/<站点>.conf`。
+生产姿势与 docker-install 联动 —— 容器 `-p 127.0.0.1:8080:80` 只绑本机 + `docker-install firewall lockdown`，
+对外统一由 nginx 反代只开 443（`nginx-install status` 会检查是否有容器端口绑在 `0.0.0.0`）。

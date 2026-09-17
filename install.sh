@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.5.0"
+VPS_TOOLS_VERSION="1.6.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -53,6 +53,7 @@ VPS_TOOLS_CMD="${CMD_DIR}/vps-tools"     # 管理命令入口
 #   monitor/   监控类（流量/资源/服务状态）
 #   network/   网络类（路由/隧道/分流）
 #   proxy/     代理类（xray/sing-box 等辅助脚本）
+#   web/       Web 服务类（nginx 等站点网关）
 #   utils/     通用工具（DDNS/证书/初始化等）
 #   backup/    备份类
 #   bench/     测试类（测速/基准）
@@ -62,6 +63,7 @@ TOOLS=(
   "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env|0|utils/vps-init/lib/common.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl"
   "vps-bench|bench/vps-bench/vps-bench.sh|||0|"
   "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env|1|utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh"
+  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env|0|web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh"
 )
 
 # ============ 辅助函数 ============

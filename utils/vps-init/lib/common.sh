@@ -74,11 +74,15 @@ confirm() {  # $1=提示文本
 DETECTED_PKG_MGR=""
 detect_pkg_mgr() {
   if [[ -n "$DETECTED_PKG_MGR" ]]; then echo "$DETECTED_PKG_MGR"; return 0; fi
+  # ⚠️ 必须用 if/elif：写成 `command -v apk && mgr=apk` 顺序赋值时**最后命中的赢**
+  # （yum > dnf > apt-get > apk），与「Alpine 优先」的意图相反。
+  # 2026-09-18 nginx-install harness 实测：PATH 里同时有 apk 与真实 apt-get 时返回 apt-get。
   local mgr=""
-  command -v apk    >/dev/null 2>&1 && mgr="apk"
-  command -v apt-get >/dev/null 2>&1 && mgr="apt-get"
-  command -v dnf    >/dev/null 2>&1 && mgr="dnf"
-  command -v yum    >/dev/null 2>&1 && mgr="yum"
+  if command -v apk >/dev/null 2>&1; then mgr="apk"
+  elif command -v apt-get >/dev/null 2>&1; then mgr="apt-get"
+  elif command -v dnf >/dev/null 2>&1; then mgr="dnf"
+  elif command -v yum >/dev/null 2>&1; then mgr="yum"
+  fi
   DETECTED_PKG_MGR="$mgr"
   echo "$mgr"
 }
