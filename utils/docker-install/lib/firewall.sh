@@ -28,8 +28,8 @@ fw_state() {
   fi
 }
 
-# ---------- 枚举实际暴露的公网可达端口（DNAT 规则） ----------
-# 输出每行: <proto> <host_port> -> <container_ip>:<container_port>
+# ---------- 枚举已发布端口（DNAT 规则） ----------
+# 输出每行: <proto> <宿主端口> -> <容器IP>:<容器端口>
 fw_exposed_ports() {
   iptables -t nat -S DOCKER 2>/dev/null | awk '
     /DNAT/ {
@@ -41,6 +41,13 @@ fw_exposed_ports() {
       }
       if (dport != "" && dest != "") print proto, dport, "->", dest
     }'
+}
+
+# ---------- 容器内部端口去重列表（供 allow/deny 提示） ----------
+# ⚠️ allow/deny 的语义是【容器内部端口】，与宿主映射端口无关。
+#    直接展示宿主端口会误导用户输入 `allow 8080`（实为容器端口 80）→ 静默无效。
+fw_container_ports() {
+  fw_exposed_ports | awk '{ n = split($NF, a, ":"); if (n == 2) print a[2] }' | sort -un | tr '\n' ' '
 }
 
 # ---------- 报告 ----------
@@ -95,6 +102,18 @@ fw_status() {
     while read -r line; do
       [[ -n "$line" ]] && echo "    $line" >&2
     done <<< "$exposed"
+    # ⚠️ allow/deny 匹配【容器内部端口】，与上面的宿主端口无关 —— 必须显式给出提示，
+    #    否则用户会照抄宿主端口执行 `allow 8080`（本机实测踩坑，静默无效）。
+    if [[ "$st" == "protected" ]]; then
+      local cports; cports="$(fw_container_ports)"
+      if [[ -n "${cports// /}" ]]; then
+        log_info "放行请用【容器内部端口】（不是上面的宿主端口）:"
+        local p
+        for p in $cports; do
+          echo "    ${0##*/} firewall allow ${p}" >&2
+        done
+      fi
+    fi
   fi
   return 0
 }
