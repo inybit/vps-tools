@@ -154,27 +154,20 @@ fw_status() {
   return 0
 }
 
-# ---------- 重载 ufw ----------
-fw_reload() {
-  log_info "重载 UFW 规则..."
-  ufw reload >/dev/null 2>&1 || { log_err "ufw reload 失败"; return 1; }
-  return 0
-}
-
 # ---------- 复核：读内核实际规则（不信文件、不信命令回显） ----------
-# $1=1 表示同时校验了 IPv6（v6 链未接管则失败）
 fw_verify() {
-  local need6="${1:-0}"
   local st; st="$(fw_state)"
-  if [[ "$st" == "protected" ]]; then
-    log_ok "复核通过: iptables -S DOCKER-USER 已含 ufw 接管规则"
-    [[ "$need6" == "1" ]] && log_ok "复核通过: ip6tables -S DOCKER-USER 已含 ufw6 接管规则"
-    return 0
-  fi
-  if [[ "$st" == "bypassed6" ]]; then
-    log_err "复核失败: IPv4 已接管但 IPv6 未生效 —— 检查 ${DI_UFW_AFTER6} 与 ip6tables"
-    return 1
-  fi
-  log_err "复核失败: 内核规则未生效（状态=${st}）—— 建议 reboot 后重试"
-  return 1
+  case "$st" in
+    protected)
+      log_ok "复核通过: iptables -S DOCKER-USER 已含 ufw 接管规则"
+      host_has_ipv6 && ip6tables -S DOCKER-USER 2>/dev/null | grep -q 'ufw6-user-forward' \
+        && log_ok "复核通过: ip6tables -S DOCKER-USER 已含 ufw6 接管规则"
+      return 0 ;;
+    bypassed6)
+      log_err "复核失败: IPv4 已接管但 IPv6 未生效 —— 上游 ufw-docker 未接管 v6 链"
+      return 1 ;;
+    *)
+      log_err "复核失败: 内核规则未生效（状态=${st}）—— 建议 reboot 后重试"
+      return 1 ;;
+  esac
 }

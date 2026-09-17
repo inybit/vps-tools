@@ -33,7 +33,7 @@ ud_ensure() {
   fi
 
   command -v sha256sum >/dev/null 2>&1 || install_pkgs coreutils sha256sum || return 1
-  command -v curl >/dev/null 2>&1 || install_pkgs curl curl || return 1
+  command -v curl >/dev/null 2>&1 || install_pkgs curl || return 1
 
   local tmp; tmp="$(mktemp)"
   log_info "下载 ufw-docker ${DI_UFWDOCKER_VERSION}（上游 chaifeng/ufw-docker）..."

@@ -34,7 +34,7 @@ fw_fix() {
   esac
 
   [[ -f "${DI_UFW_AFTER}" ]] || { log_err "缺少 ${DI_UFW_AFTER}（ufw 未初始化？）"; return 1; }
-  command -v iptables >/dev/null 2>&1 || install_pkgs iptables iptables || return 1
+  command -v iptables >/dev/null 2>&1 || install_pkgs iptables || return 1
 
   ud_install_rules || return 1
   fw_verify

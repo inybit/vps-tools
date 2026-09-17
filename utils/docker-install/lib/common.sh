@@ -109,12 +109,6 @@ install_pkgs() {  # $1=包名 $2=复查命令名（默认=包名）
   return 0
 }
 
-# ---------- 备份文件（cp -a 加 .bak，同目录） ----------
-backup_file() {  # $1=文件路径
-  [[ -f "$1" ]] || return 0
-  cp -a "$1" "$1.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null && log_info "已备份: $1"
-}
-
 # ---------- 防火墙后端探测 ----------
 # 输出: iptables | nftables | none
 #

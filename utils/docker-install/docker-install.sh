@@ -22,8 +22,6 @@
 DI_VERSION="1.1.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-: "${DI_TPL_DIR:=${SCRIPT_DIR}/templates}"
-export DI_TPL_DIR
 
 # shellcheck source=lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
