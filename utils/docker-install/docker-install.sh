@@ -19,7 +19,7 @@
 # 配置: /etc/docker-install.env（可缺省）
 # 铁律: 报成功前必须读内核实际规则复核（iptables -S DOCKER-USER），不看文件
 
-DI_VERSION="1.0.0"
+DI_VERSION="1.1.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${DI_TPL_DIR:=${SCRIPT_DIR}/templates}"
@@ -27,8 +27,10 @@ export DI_TPL_DIR
 
 # shellcheck source=lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
-# shellcheck source=lib/render.sh
-. "${SCRIPT_DIR}/lib/render.sh"
+# shellcheck source=lib/ufwdocker.sh
+. "${SCRIPT_DIR}/lib/ufwdocker.sh"
+# shellcheck source=lib/lockdown.sh
+. "${SCRIPT_DIR}/lib/lockdown.sh"
 # shellcheck source=lib/install.sh
 . "${SCRIPT_DIR}/lib/install.sh"
 # shellcheck source=lib/firewall.sh
@@ -67,21 +69,34 @@ wizard() {
   fi
   echo "" >&2
 
-  # 3) 放行端口（可选）
-  log_info "[3/5] 放行容器端口"
-  local ports="${DI_ALLOW_PORTS:-}"
-  if [[ -z "$ports" ]]; then
-    read_input "要放行的容器端口（逗号分隔，如 80,443；留空跳过）: " ports || ports=""
-  fi
-  if [[ -n "$ports" ]]; then
-    local p
-    IFS=',' read -r -a _ports <<< "$ports"
-    for p in "${_ports[@]}"; do
-      p="$(echo "$p" | tr -d ' ')"
-      [[ -n "$p" ]] && fw_allow "$p" || true
-    done
+  # 3) 暴露策略
+  log_info "[3/5] 容器端口暴露策略"
+  echo "  1) 不暴露（推荐）—— 容器端口仅服务器本地可访问，对外走 Nginx 统一网关" >&2
+  echo "  2) 放行指定端口 —— 直接对公网开放容器端口" >&2
+  local choice=""
+  read_input "选择 [1/2]（默认 1）: " choice || choice=""
+  if [[ "$choice" == "2" ]]; then
+    local ports="${DI_ALLOW_PORTS:-}"
+    if [[ -z "$ports" ]]; then
+      read_input "要放行的容器端口（逗号分隔，如 80,443）: " ports || ports=""
+    fi
+    if [[ -n "$ports" ]]; then
+      # 上游 ufw-docker 按【容器】放行（绑定容器 IP，跟随容器变化）
+      local cname=""
+      read_input "容器名（放行按容器绑定，需先 docker run）: " cname || cname=""
+      if [[ -n "$cname" ]]; then
+        local p
+        IFS=',' read -r -a _ports <<< "$ports"
+        for p in "${_ports[@]}"; do
+          p="$(echo "$p" | tr -d ' ')"
+          [[ -n "$p" ]] && fw_allow "$cname" "$p" || true
+        done
+      else
+        log_warn "未指定容器名 —— 跳过放行（可稍后: firewall allow <容器名> <端口>）"
+      fi
+    fi
   else
-    log_info "跳过"
+    fw_lockdown
   fi
   echo "" >&2
 
@@ -142,6 +157,7 @@ main() {
         allow)     fw_allow "${3:-}" "${4:-}" ;;
         deny)      fw_deny "${3:-}" "${4:-}" ;;
         uninstall) fw_uninstall ;;
+        lockdown)  fw_lockdown ;;
         *) log_err "未知子命令: firewall $sub"; usage; return 1 ;;
       esac ;;
     user)     require_root; load_env; user_main "${2:-}" ;;

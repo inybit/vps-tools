@@ -22,10 +22,40 @@ fw_state() {
   rules="$(iptables -S DOCKER-USER 2>/dev/null || true)"
   if [[ -z "$rules" ]]; then echo "bypassed"; return 0; fi
   if echo "$rules" | grep -q 'ufw-user-forward' && echo "$rules" | grep -q 'ufw-docker-logging-deny'; then
+    # 主机有全局 IPv6 且容器在 v6 上发布时，v6 链也必须接管，否则仍是绕过
+    if host_has_ipv6 && fw_exposed_ports6 | grep -q .; then
+      local rules6
+      rules6="$(ip6tables -S DOCKER-USER 2>/dev/null || true)"
+      if [[ -z "$rules6" ]] || ! echo "$rules6" | grep -q 'ufw6-user-forward'; then
+        echo "bypassed6"
+        return 0
+      fi
+    fi
     echo "protected"
   else
     echo "bypassed"
   fi
+}
+# ---------- 主机是否有全局 IPv6（决定是否需要 v6 链判定） ----------
+host_has_ipv6() {
+  [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 1)" == "0" ]] || return 1
+  command -v ip >/dev/null 2>&1 || return 1
+  ip -6 addr show scope global 2>/dev/null | grep -q 'inet6' || return 1
+  return 0
+}
+
+# ---------- 枚举 IPv6 已发布端口（DNAT6 规则） ----------
+fw_exposed_ports6() {
+  ip6tables -t nat -S DOCKER 2>/dev/null | awk '
+    /DNAT/ {
+      proto=""; dport=""; dest=""
+      for (i = 1; i <= NF; i++) {
+        if ($i == "-p") proto = $(i+1)
+        if ($i == "--dport") dport = $(i+1)
+        if ($i == "--to-destination") dest = $(i+1)
+      }
+      if (dport != "" && dest != "") print proto, dport, "->", dest
+    }'
 }
 
 # ---------- 枚举已发布端口（DNAT 规则） ----------
@@ -79,6 +109,11 @@ fw_status() {
     protected)
       log_ok "状态: PROTECTED —— DOCKER-USER 已由 ufw 接管，已发布端口受 ufw 管控"
       ;;
+    bypassed6)
+      log_err "状态: BYPASSED(IPv6) —— IPv4 已接管，但 IPv6 未接管"
+      log_warn "容器以 [::]:port 发布时，IPv6 流量仍可绕过 ufw"
+      log_warn "修复: ${0##*/} firewall fix（会同时写 after6.rules）"
+      ;;
     bypassed)
       log_err "状态: BYPASSED —— UFW 无法管控 Docker 已发布端口（绕过）"
       ;;
@@ -102,17 +137,18 @@ fw_status() {
     while read -r line; do
       [[ -n "$line" ]] && echo "    $line" >&2
     done <<< "$exposed"
-    # ⚠️ allow/deny 匹配【容器内部端口】，与上面的宿主端口无关 —— 必须显式给出提示，
-    #    否则用户会照抄宿主端口执行 `allow 8080`（本机实测踩坑，静默无效）。
+    # 放行按【容器】进行（上游 ufw-docker 绑定容器 IP）→ 给出可直接复制的命令，
+    # 并点明「端口是容器内部端口，不是上面的宿主端口」（真机踩坑，照抄宿主端口会静默无效）。
     if [[ "$st" == "protected" ]]; then
       local cports; cports="$(fw_container_ports)"
       if [[ -n "${cports// /}" ]]; then
-        log_info "放行请用【容器内部端口】（不是上面的宿主端口）:"
+        log_info "放行请用【容器名 + 容器内部端口】（不是上面的宿主端口）:"
         local p
         for p in $cports; do
-          echo "    ${0##*/} firewall allow ${p}" >&2
+          echo "    ${0##*/} firewall allow <容器名> ${p}" >&2
         done
       fi
+      log_info "不想暴露任何端口？执行: ${0##*/} firewall lockdown"
     fi
   fi
   return 0
@@ -126,11 +162,18 @@ fw_reload() {
 }
 
 # ---------- 复核：读内核实际规则（不信文件、不信命令回显） ----------
+# $1=1 表示同时校验了 IPv6（v6 链未接管则失败）
 fw_verify() {
+  local need6="${1:-0}"
   local st; st="$(fw_state)"
   if [[ "$st" == "protected" ]]; then
     log_ok "复核通过: iptables -S DOCKER-USER 已含 ufw 接管规则"
+    [[ "$need6" == "1" ]] && log_ok "复核通过: ip6tables -S DOCKER-USER 已含 ufw6 接管规则"
     return 0
+  fi
+  if [[ "$st" == "bypassed6" ]]; then
+    log_err "复核失败: IPv4 已接管但 IPv6 未生效 —— 检查 ${DI_UFW_AFTER6} 与 ip6tables"
+    return 1
   fi
   log_err "复核失败: 内核规则未生效（状态=${st}）—— 建议 reboot 后重试"
   return 1
