@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.6.1"
+VPS_TOOLS_VERSION="1.6.2"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -256,12 +256,31 @@ read_input() {  # $1=提示 $2=变量名；返回 1 = 无交互终端
 }
 
 # 安装/更新 vps-tools 管理命令（自身）
+# ⚠️ 不能只在「文件不存在」时装：管理命令是 install.sh 的旧副本，本机曾长期停在 1.3.0，
+#    而其中的交互判据修复（has_ctty）永远到不了用户机器上（2026-09-18 真机实测：
+#    旧副本在无 TTY 下报 "line 238: /dev/tty: No such device or address"）。
+#    故「版本不一致」同样刷新（同版本不重写，避免每次无谓下载）。
+installed_self_version() {  # stdout=已装管理命令的版本号（读不到则空）
+  [[ -r "${VPS_TOOLS_CMD}" ]] || return 0
+  sed -n 's/^VPS_TOOLS_VERSION="\([^"]*\)".*/\1/p' "${VPS_TOOLS_CMD}" 2>/dev/null | head -1
+}
+
 install_self() {
   [[ $EUID -eq 0 ]] || return 1
+  local cur
+  cur="$(installed_self_version)"
+  if [[ "$cur" == "$VPS_TOOLS_VERSION" ]]; then
+    log_info "管理命令已是最新（v${cur}）: ${VPS_TOOLS_CMD}"
+    return 0
+  fi
   mkdir -p "$(dirname "${VPS_TOOLS_CMD}")"   # curl 写文件前先建目录（防 curl 23）
   if curl -fsSL --max-time 60 "${BASE_URL}/install.sh" -o "${VPS_TOOLS_CMD}"; then
     chmod +x "${VPS_TOOLS_CMD}"
-    log_info "已安装管理命令: ${VPS_TOOLS_CMD}（直接运行 vps-tools 进入管理）"
+    if [[ -n "$cur" ]]; then
+      log_info "已更新管理命令: ${VPS_TOOLS_CMD}（v${cur} → v${VPS_TOOLS_VERSION}）"
+    else
+      log_info "已安装管理命令: ${VPS_TOOLS_CMD}（直接运行 vps-tools 进入管理）"
+    fi
     return 0
   fi
   log_warn "安装 ${VPS_TOOLS_CMD} 失败（不影响工具安装）"
@@ -308,8 +327,9 @@ pick_tools_menu() {  # $1=动作 install|update|uninstall
 }
 
 interactive_menu() {
-  # root 时确保 vps-tools 管理命令就位（管道方式首次运行也生效）
-  if [[ $EUID -eq 0 ]] && [[ ! -x "${VPS_TOOLS_CMD}" ]]; then
+  # root 时确保 vps-tools 管理命令就位且为当前版本（管道方式首次运行也生效；
+  # 旧版本副本会在无 TTY 下报 /dev/tty 错，故版本不一致也要刷新）
+  if [[ $EUID -eq 0 ]]; then
     install_self || true   # 非 root / 下载失败不阻塞菜单
   fi
   # 启动检查更新（离线/同版本静默，不阻塞菜单）
@@ -374,6 +394,7 @@ EOF
         log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}"
         exit 1
       fi
+      install_self || true   # 管理命令与工具一起保持最新（旧副本有 /dev/tty 报错缺陷）
       if [[ -n "$tool" ]]; then
         local line
         if line=$(find_tool "$tool"); then
@@ -404,8 +425,16 @@ EOF
     list)
       list_tools
       ;;
+    self-update)
+      # 帮助里已列出的子命令，此前未实现（2026-09-18 补）
+      if [[ $EUID -ne 0 ]]; then
+        log_err "需要 root 权限。请用: sudo ${0##*/} self-update"
+        exit 1
+      fi
+      install_self || { log_err "self-update 失败"; return 1; }
+      ;;
     *)
-      log_err "未知动作: ${action}（install / update / uninstall / list）"
+      log_err "未知动作: ${action}（install / update / uninstall / list / self-update）"
       list_tools
       return 1
       ;;

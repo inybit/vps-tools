@@ -486,6 +486,56 @@ TTYPROBE="$(NI_ENV_FILE="${TMP}/none.env" setsid bash "${TMP}/ttyprobe.sh" "$TOO
 chk "探测脚本真的 source 到了库" "echo \"\$TTYPROBE\" | grep -q 'src=ok'"
 chk "无终端时 has_ctty=0"        "echo \"\$TTYPROBE\" | grep -q 'has_ctty=0'"
 chk "无终端时 read_input 无噪音"  "echo \"\$TTYPROBE\" | grep -q 'stderr=\[\]'"
+# install_self 必须能刷新「已存在但版本旧」的管理命令副本 —— 否则交互判据修复
+# 永远到不了用户机器（2026-09-18 真机实测：/usr/local/bin/vps-tools 停在 1.3.0，
+# 无 TTY 下报 line 238: /dev/tty: No such device or address）。
+SELF_T="${TMP}/selfupd"; mkdir -p "$SELF_T/bin" "$SELF_T/fake"
+python3 - "${REPO}/install.sh" > "$SELF_T/fns.sh" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+out = []
+for fn in ('installed_self_version', 'install_self'):
+    m = re.search(r'^' + fn + r'\(\) \{.*?^\}', src, re.M | re.S)
+    # EUID 是 bash 只读变量，替换成可 mock 的名字才能测非 root 分支
+    out.append(m.group(0).replace('$EUID', '$FAKE_EUID'))
+print("\n".join(out))
+PY
+cat > "$SELF_T/fake/curl" <<'STUB'
+#!/usr/bin/env bash
+out=""; while [[ $# -gt 0 ]]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done
+[[ -n "$out" ]] || exit 0
+printf 'VPS_TOOLS_VERSION="9.9.9"\n# fake\n' > "$out"
+STUB
+chmod +x "$SELF_T/fake/curl"
+cat > "$SELF_T/run.sh" <<'RUN'
+set -u
+SELF_T="$3"
+source "$SELF_T/fns.sh"
+log_info(){ :; }
+log_warn(){ :; }
+FAKE_EUID="$2"
+VPS_TOOLS_VERSION="9.9.9"
+BASE_URL="http://fake"
+VPS_TOOLS_CMD="$1"
+PATH="$SELF_T/fake:$PATH"
+install_self
+RUN
+printf 'VPS_TOOLS_VERSION="1.3.0"\nold\n' > "$SELF_T/bin/vps-tools"
+# ⚠️ 夹具必须显式 chmod +x：printf 覆写会保留上一次 chmod 的模式，
+#    若夹具不可执行，「只看文件是否存在」的旧逻辑同样会去下载 → 变异测试假 PASS（本次踩过）。
+chmod +x "$SELF_T/bin/vps-tools"
+bash "$SELF_T/run.sh" "$SELF_T/bin/vps-tools" 0 "$SELF_T" 2>/dev/null || true
+chk "install_self 能刷新旧版本副本" \
+  "grep -q 'VPS_TOOLS_VERSION=\"9.9.9\"' '$SELF_T/bin/vps-tools'"
+printf 'VPS_TOOLS_VERSION="9.9.9"\nkeep-me\n' > "$SELF_T/bin/vps-tools"
+chmod +x "$SELF_T/bin/vps-tools"
+bash "$SELF_T/run.sh" "$SELF_T/bin/vps-tools" 0 "$SELF_T" 2>/dev/null || true
+chk "install_self 同版本不重写"      "grep -q 'keep-me' '$SELF_T/bin/vps-tools'"
+printf 'VPS_TOOLS_VERSION="1.3.0"\nold\n' > "$SELF_T/bin/vps-tools"
+chmod +x "$SELF_T/bin/vps-tools"
+bash "$SELF_T/run.sh" "$SELF_T/bin/vps-tools" 1 "$SELF_T" 2>/dev/null || true
+chk "install_self 非 root 不下载"    "grep -q 'VPS_TOOLS_VERSION=\"1.3.0\"' '$SELF_T/bin/vps-tools'"
+chk "帮助里的 self-update 已实现"    "grep -q '^    self-update)' '${REPO}/install.sh'"
 echo ""
 
 echo "============================================================"
