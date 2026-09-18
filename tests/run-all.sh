@@ -22,9 +22,11 @@ RCLONE_BIN="${RCLONE_BIN:-$(command -v rclone 2>/dev/null || true)}"
 [[ -n "$RCLONE_BIN" ]] && export RCLONE_BIN
 
 # 已知既存失败（与本轮改动无关，勿当成回归）：
-#   verify-nginx-install.sh      — install_self 陈旧副本刷新
+#   verify-nginx-install.sh      — install_self 陈旧副本刷新（1 断言）
 #   verify-xray-deploy-all.sh    — 端到端分流切换
 #   verify-xray-deploy-split.sh  — 新增函数白名单
+# 注：上述套件必须在真的 FAIL 时退出非 0，否则 run-all 会误报 PASS（假绿）。
+#     verify-nginx-install.sh 曾缺尾部 `[[ $FAIL -eq 0 ]]`，2026-09-19 修复。
 KNOWN_FAIL='verify-nginx-install.sh verify-xray-deploy-all.sh verify-xray-deploy-split.sh'
 
 npass=0; nfail=0; failed=""
