@@ -33,7 +33,11 @@ STATE_FILE="${CONFIG_DIR}/state.json"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 SERVICE_NAME="xray-deploy"
 GEO_SOURCE="https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download"
-GITHUB_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+# ⚠️ 不能用 /releases/latest：该端点【只返回非 prerelease 的最新版】，
+#    而 Xray 从 v26.3.23 起所有 release 都标 prerelease:true
+#    → 实测它恒返回 v26.3.27（2026-03-27），实际最新是 v26.9.9。
+#    改用 releases 列表取首个（按发布时间倒序，draft 已由 GitHub 排除）。
+GITHUB_API="https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5"
 
 # lib/ 模块加载（顺序无关：函数在分发时才解析；顶层常量均在运行时使用）
 LIB_DIR="${SCRIPT_DIR}/lib"

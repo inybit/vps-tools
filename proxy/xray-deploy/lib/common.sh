@@ -44,6 +44,20 @@ need_root() {
   [[ "$(id -u)" -eq 0 ]] || die "需要 root 权限，请用: sudo $0 $*"
 }
 
+# ============ 版本比较 ============
+# 语义化版本比较（x.y.z，纯 bash 兼容 Alpine busybox，不用 sort -V）。
+# 用于 upgrade 判定：字符串相等比较会把「已装新版」误判为「需要升级」并降级。
+ver_gt() {  # $1 > $2 返回 0
+  local IFS=. a b i
+  read -ra a <<<"$1"
+  read -ra b <<<"$2"
+  for i in 0 1 2; do
+    [[ "${a[$i]:-0}" -gt "${b[$i]:-0}" ]] && return 0
+    [[ "${a[$i]:-0}" -lt "${b[$i]:-0}" ]] && return 1
+  done
+  return 1
+}
+
 # ============ 依赖安装 ============
 detect_pkg_mgr() {
   if command -v apk >/dev/null 2>&1; then echo "apk"

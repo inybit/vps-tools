@@ -145,22 +145,31 @@ fi
 echo
 
 # ---- 3b) 共有函数的函数体逐字比对（这是「纯搬运」的硬证据）----
+# ALLOW_CHANGED_FNS：空格分隔的「预期改动函数」白名单。
+#   阶段 1（纯拆分）应为空；阶段 2/3 有意改动某函数时填入 → 其余函数仍受强保证。
 echo "    共有函数体逐字比对（${n_cur} 个中的共有部分）..."
 body_diff=0
+changed_fns=""
 while IFS= read -r fn; do
   [[ -n "$fn" ]] || continue
   if ! diff -q <(fn_block "$BASE" "$fn") <(fn_block "$CUR" "$fn") >/dev/null 2>&1; then
-    echo "      ✗ ${fn} 函数体有改动"
-    diff -u <(fn_block "$BASE" "$fn") <(fn_block "$CUR" "$fn") | head -20 | sed 's/^/          /'
-    body_diff=$((body_diff + 1))
+    if grep -qw "$fn" <<<"${ALLOW_CHANGED_FNS:-}"; then
+      echo "      ~ ${fn} 已改动（ALLOW_CHANGED_FNS 已声明）"
+      changed_fns="${changed_fns}${fn} "
+    else
+      echo "      ✗ ${fn} 函数体有改动（未声明）"
+      diff -u <(fn_block "$BASE" "$fn") <(fn_block "$CUR" "$fn") | head -20 | sed 's/^/          /'
+      body_diff=$((body_diff + 1))
+    fi
   fi
 done <<< "$common"
 
 echo
 if [[ "$body_diff" -eq 0 ]]; then
-  echo "    ✓ ${n_base} 个原函数体逐字相同（纯搬运，零逻辑变更）"
+  echo "    ✓ 未声明改动的函数体逐字相同（共 ${n_base} 个原函数）"
+  [[ -n "$changed_fns" ]] && echo "    已声明改动: ${changed_fns}"
 else
-  echo "    ✗ ${body_diff} 个函数体被改动"
+  echo "    ✗ ${body_diff} 个函数体被改动（未声明）"
 fi
 
 # ---- 3c) 判定 ----

@@ -53,9 +53,20 @@ cmd_upgrade() {
   local cur latest
   cur="$("${BIN_PATH}" version | head -1 | awk '{print $2}')"
   latest="$(latest_xray_tag)" || die "无法获取最新版本"
+  [[ -n "$latest" ]] || die "无法解析最新版本号（GitHub API 返回异常）"
   # xray version 输出无 v 前缀，tag 带 v 前缀
   cur="${cur#v}"; latest="${latest#v}"
-  [[ "$cur" == "$latest" ]] && { log_info "已是最新版本 ${cur}"; return 0; }
+  if [[ "$cur" == "$latest" ]]; then
+    log_info "已是最新版本 ${cur}"; return 0
+  fi
+  # ⚠️ 必须做语义化比较，不能用「不相等就升级」：
+  #    已装版本比远端新时（远端 API 异常/回退、或手动装了更新的版本）
+  #    字符串比较会判定「需要升级」并执行【降级】，把新二进制换回旧版。
+  if ver_gt "$cur" "$latest"; then
+    log_warn "本地 ${cur} 比远端最新 ${latest} 更新，跳过（避免降级）"
+    log_warn "  如需强制降级：手动下载 ${latest} 替换 ${BIN_PATH}"
+    return 0
+  fi
   log_info "升级 ${cur} → ${latest}"
   # 备份旧二进制，失败回滚
   cp "${BIN_PATH}" "${BIN_PATH}.bak"

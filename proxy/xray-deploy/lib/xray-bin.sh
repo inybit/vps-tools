@@ -2,8 +2,14 @@
 # xray-bin.sh — Xray 二进制：版本查询 / 下载安装 / geo 数据更新
 
 # ============ Xray 下载/安装 ============
+# 取最新 release tag。
+# ⚠️ 必须用 releases 列表而非 /releases/latest —— 见主脚本 GITHUB_API 注释：
+#    Xray 全部 release 都标 prerelease:true，/releases/latest 会漏掉它们
+#    （实测恒返回 v26.3.27，实际最新 v26.9.9，导致永远装旧版）。
+#    列表按 published_at 倒序，取首个非 draft 的 tag_name。
 latest_xray_tag() {
-  curl -fsSL --max-time 20 "${GITHUB_API}" | jq -r '.tag_name'
+  curl -fsSL --max-time 20 "${GITHUB_API}" \
+    | jq -r '[.[] | select(.draft == false)][0].tag_name // empty'
 }
 
 download_xray() {  # $1=tag；失败 return 1（由调用方决定回滚）
