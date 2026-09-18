@@ -104,7 +104,7 @@ vps-tools/
 └── backup/             # 备份类
     └── vps-backup/                  # restic + rclone(GDrive) 备份与灾难恢复（2026-09-19）
         ├── vps-backup.sh            # 入口：向导 + 子命令分发
-        ├── lib/                     # common/deps/repo/backup/retention/restore/timer/status/usage
+        ├── lib/                     # common/interact/pkg/restic/deps/repo/backup/retention/restore/timer/status/usage
         └── templates/vps-backup.env.example
 ```
 
@@ -127,7 +127,7 @@ vps-tools/
 
 ```bash
 bash tests/verify-docker-install.sh       # docker-install 回归（mock 环境，无需 root/真机）
-bash tests/verify-vps-backup.sh           # vps-backup 回归（119 断言，mock 环境，无需 root/网络）
+bash tests/verify-vps-backup.sh           # vps-backup 回归（139 断言，mock 环境，无需 root/网络）
 bash tests/verify-vps-backup-e2e.sh       # vps-backup 真机 E2E（48 断言，需真实 restic+rclone，
                                           #   local backend 模拟 GDrive，全程零出境）
 ```
@@ -333,6 +333,22 @@ sudo -S -p '' vps-backup restore latest --tag core --target /tmp/restore
 sudo -S -p '' vps-backup status                     # repo/依赖/remote/快照新鲜度/timer/凭证自检
 sudo -S -p '' vps-backup runbook                    # 生成灾难恢复文档（/root/VPS-RESTORE.md）
 ```
+
+**备份路径完全可自定义**（分层只是默认建议，不是硬编码）：
+
+```bash
+sudo vps-backup paths show                       # 查看两层路径 + 体检（存在性/排除冲突）
+sudo vps-backup paths edit                       # 交互逐层设置
+sudo vps-backup paths set data /srv /opt/app     # 直接设置某层（空格分隔绝对路径）
+sudo vps-backup exclude add /srv/scratch         # 排除表管理
+sudo vps-backup exclude remove /mnt              # 移除排除项（凭证类模式受保护）
+```
+也可直接编辑 `/etc/vps-backup.env` 的 `VP_BACKUP_CORE_PATHS` / `VP_BACKUP_DATA_PATHS`，改完立即生效。
+
+⚠️ **自定义路径的两个静默失败陷阱（已内置防护）**：
+- 路径落在**排除表覆盖的位置**（`/tmp`、`/mnt`、`~/.cache`…）→ restic 会「成功退出但备份 0 文件」。
+  工具现在会：设置时**拒绝**、备份时**跳过并告警**、备份后**复核快照文件数**（0 则报错）。
+- 路径是**空目录** → 同上按 0 文件失败处理（不再是假成功）。
 
 **分层备份（快速恢复的核心）**：
 

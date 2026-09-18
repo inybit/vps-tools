@@ -39,7 +39,7 @@ trap 'rm -rf "$BASE"' EXIT
 CLOUD="$BASE/drive"          # 模拟云端（rclone local remote 的根）
 SRC="$BASE/src"              # 备份源
 mkdir -p "$CLOUD" "$SRC/etc/xray-deploy" "$SRC/home/user/.ssh" "$SRC/data"
-head -c 3000000 /dev/urandom > "$SRC/data/blob.bin"
+head -c 20000000 /dev/urandom > "$SRC/data/blob.bin"   # 20MB：让内容定义分块可观测
 echo "v1 config" > "$SRC/etc/app.conf"
 echo "sshkey" > "$SRC/home/user/.ssh/id_ed25519"
 echo '{"inbound":"reality"}' > "$SRC/etc/xray-deploy/config.json"
@@ -151,8 +151,9 @@ printf 'X' | dd of="$SRC/data/blob.bin" bs=1 seek=1500000 conv=notrunc status=no
 "$TOOL" backup data > "$BASE/out" 2> "$BASE/err"
 SIZE2=$(du -sk "$CLOUD" | awk '{print $1}')
 DELTA=$((SIZE2 - SIZE_NC))
-echo "  (改 1 字节后：${SIZE_NC}KB → ${SIZE2}KB，增量 ${DELTA}KB；源文件 3000KB)"
-chk "改 1 字节后增量 < 源文件的 70%（内容定义分块只重传受影响块）" "[[ $DELTA -lt 2100 ]]"
+echo "  (改 1 字节后：${SIZE_NC}KB → ${SIZE2}KB，增量 ${DELTA}KB；源文件 20000KB)"
+# 内容定义分块：改 1 字节只应重传 1~2 个块（restic 平均块 ~1MB，最大 8MB）
+chk "改 1 字节后增量 < 源文件的 50%（分块生效，非全量重传）" "[[ $DELTA -lt 10000 ]]"
 
 echo ""
 echo "=== [6] 恢复（真实内容逐字节比对） ==="
@@ -167,7 +168,7 @@ chk "恢复出的 SSH 私钥与源一致" \
 chk "恢复目标不含凭证文件" "! find '$BASE/restore' -name 'restic-password' | grep -q ."
 rm -rf "$BASE/restore_data"
 "$TOOL" restore latest --tag data --target "$BASE/restore_data" > "$BASE/out" 2> "$BASE/err"
-chk "data 层恢复后 3MB blob sha256 一致（含改动后的最新版本）" \
+chk "data 层恢复后 20MB blob sha256 一致（含改动后的最新版本）" \
     "[[ \$(sha256sum < '$SRC/data/blob.bin' | cut -d' ' -f1) == \$(sha256sum < '$BASE/restore_data$SRC/data/blob.bin' | cut -d' ' -f1) ]]"
 
 echo ""

@@ -23,6 +23,12 @@ vps-backup ${VP_VERSION} — restic + rclone(Google Drive) VPS 备份与灾难�
   vps-backup maintain                forget + prune + 完整性校验（每周 timer 调用）
   vps-backup check                   完整性校验（数据块抽查 ${VP_CHECK_SUBSET:-5%}）
   vps-backup unlock [--dry-run|--all]  查看/清理 repo 锁（--all 强制清除他人锁）
+  vps-backup paths                   查看备份路径（core/data）+ 存在性/排除冲突体检
+  vps-backup paths edit              交互设置各层备份路径
+  vps-backup paths set core <路径...>  直接设置某层路径（绝对路径，空格分隔）
+  vps-backup exclude list            查看排除表
+  vps-backup exclude add <模式>      追加排除项
+  vps-backup exclude remove <模式>   移除排除项（凭证类模式受保护，不可移除）
   vps-backup status                  汇总: repo/密码文件/依赖/remote/最近快照/timer/凭证自检
   vps-backup runbook [--stdout]      生成灾难恢复 runbook（默认写 /root/VPS-RESTORE.md）
   vps-backup install-timer           安装/更新 systemd timer
@@ -34,6 +40,8 @@ vps-backup ${VP_VERSION} — restic + rclone(Google Drive) VPS 备份与灾难�
 设计要点:
   * 分层备份: core（/etc、dotfiles、vps-tools，每 6h，恢复秒~分钟）
               data（docker volumes、站点，每日，可后台恢复）
+    **路径完全可自定义**（env 键或 vps-backup paths set）；自定义后会体检
+    「是否存在 / 是否被排除表挡掉」——被挡掉的路径会让备份「成功但 0 文件」。
   * 凭证不入包: repo 密码 / rclone 配置 / 本工具 env 一律排除
     （机器全毁时靠 Bitwarden 里的密码才读得回备份 —— 见 runbook）
   * connect 与 init 严格分离: 恢复场景绝不执行 init
@@ -43,8 +51,9 @@ vps-backup ${VP_VERSION} — restic + rclone(Google Drive) VPS 备份与灾难�
   VP_RCLONE_REMOTE=gdrive            rclone remote 名
   VP_REPO_BASE=vps-backup            remote 内 repo 根目录
   VP_HOST=<hostname>                 repo 子目录名 / 快照 host 标签
-  VP_BACKUP_CORE_PATHS="/etc /root ..."   core 层路径
+  VP_BACKUP_CORE_PATHS="/etc /root ..."   core 层路径（空格分隔，绝对路径）
   VP_BACKUP_DATA_PATHS="/var/lib/docker/volumes /srv"  data 层路径
+                                          （或用 vps-backup paths set 修改）
   VP_RETENTION_ARGS="--keep-daily 7 --keep-weekly 5 --keep-monthly 6 --keep-yearly 2"
   VP_CHECK_SUBSET=5%                 每周抽查比例
   VP_CORE_INTERVAL_HOURS=6           core 备份间隔

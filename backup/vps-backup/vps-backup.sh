@@ -11,6 +11,8 @@
 #   vps-backup snapshots|ls|dump  只读侦察
 #   vps-backup restore <快照> --target <目录>   恢复（必须显式 target）
 #   vps-backup forget|prune|maintain|check      保留策略与完整性校验
+#   vps-backup paths [show|set|edit|check]   查看/自定义备份路径（core/data 分层）
+#   vps-backup exclude [list|add|remove]     管理排除表（自定义路径时配套）
 #   vps-backup status             状态汇总
 #   vps-backup runbook            生成灾难恢复 runbook
 #   vps-backup install-timer|timer-status|uninstall-timer
@@ -19,18 +21,28 @@
 # 配置: /etc/vps-backup.env（600）；密码: /etc/restic-password（600）
 # 铁律: 凭证不入备份包；connect 与 init 严格分离；报成功前实测服务端状态
 
-VP_VERSION="1.1.0"
+VP_VERSION="1.2.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=lib/interact.sh
+. "${SCRIPT_DIR}/lib/interact.sh"
+# shellcheck source=lib/pkg.sh
+. "${SCRIPT_DIR}/lib/pkg.sh"
+# shellcheck source=lib/restic.sh
+. "${SCRIPT_DIR}/lib/restic.sh"
 # shellcheck source=lib/deps.sh
 . "${SCRIPT_DIR}/lib/deps.sh"
 # shellcheck source=lib/repo.sh
 . "${SCRIPT_DIR}/lib/repo.sh"
+# shellcheck source=lib/exclude.sh
+. "${SCRIPT_DIR}/lib/exclude.sh"
 # shellcheck source=lib/backup.sh
 . "${SCRIPT_DIR}/lib/backup.sh"
+# shellcheck source=lib/paths.sh
+. "${SCRIPT_DIR}/lib/paths.sh"
 # shellcheck source=lib/retention.sh
 . "${SCRIPT_DIR}/lib/retention.sh"
 # shellcheck source=lib/restore.sh
@@ -138,6 +150,19 @@ main() {
     maintain) require_root; load_env; vp_retention_main maintain ;;
     check)    require_root; load_env; vp_repo_check ;;
     unlock)   require_root; load_env; vp_unlock "${2:-}" ;;
+
+    paths)
+      load_env
+      case "${2:-show}" in
+        show|"")  vp_paths_show ;;
+        set)      require_root; vp_paths_set "${3:-}" "${@:4}" ;;
+        edit)     vp_paths_edit ;;
+        check)    vp_paths_check "${3:-core}" ;;
+        *) log_err "未知子命令: paths ${2}（show|set|edit|check）"; return 1 ;;
+      esac ;;
+    exclude)
+      load_env
+      vp_exclude_main "${2:-list}" "${3:-}" ;;
 
     status)   load_env; vp_status_main ;;
     runbook)  load_env; vp_runbook_main "${2:-}" ;;

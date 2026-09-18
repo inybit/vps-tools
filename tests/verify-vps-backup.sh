@@ -28,8 +28,12 @@ chk(){ if eval "$2"; then ok "$1"; else bad "$1" "$2"; fi; }
 # 于是「匹配成功」反而报 FAIL（本次自伤：status 明明打印了却 4 条断言全红）。
 # 统一姿势：先落文件，再 grep 文件。
 snap(){ "$TOOL" "$@" > "$TMP/snap.out" 2>&1; echo $?; }
+rune(){ local kv="$1"; shift; env "$kv" "$TOOL" "$@" > "$TMP/out" 2> "$TMP/err"; echo $?; }
 
 # ---------- 环境隔离（全部指到临时目录） ----------
+# ⚠️ 正例数据目录不能放 /tmp（默认排除表含 /tmp）→ 放 $HOME 下的一次性目录
+TMPDATA="$(mktemp -d "${HOME}/.vps-backup-test.XXXXXX")"
+trap 'rm -rf "$TMP" "$TMPDATA"' EXIT
 export VP_ENV_FILE="$TMP/vps-backup.env"
 export VP_PASSWORD_FILE="$TMP/restic-password"
 export VP_EXCLUDE_FILE="$TMP/vps-backup.exclude"
@@ -51,16 +55,16 @@ cat > "$VP_ENV_FILE" <<EOF
 VP_RCLONE_REMOTE="gdrive"
 VP_REPO_BASE="vps-backup"
 VP_HOST="testhost"
-VP_BACKUP_CORE_PATHS="$TMP/core"
-VP_BACKUP_DATA_PATHS="$TMP/data"
+VP_BACKUP_CORE_PATHS="$TMPDATA/core"
+VP_BACKUP_DATA_PATHS="$TMPDATA/data"
 EOF
 chmod 600 "$VP_ENV_FILE"
-mkdir -p "$TMP/core/etc" "$TMP/data/vol"
-echo hello > "$TMP/core/etc/x.conf"
+mkdir -p "$TMPDATA/core/etc" "$TMPDATA/data/vol"
+echo hello > "$TMPDATA/core/etc/x.conf"
 
 # 备份范围变量以环境变量形式传入（load_env 外部优先，可覆盖 env 文件）
-export VP_BACKUP_CORE_PATHS="$TMP/core"
-export VP_BACKUP_DATA_PATHS="$TMP/data"
+export VP_BACKUP_CORE_PATHS="$TMPDATA/core"
+export VP_BACKUP_DATA_PATHS="$TMPDATA/data"
 
 # ---------- restic / rclone mock（记录调用；可切换行为） ----------
 cat > "$VP_RESTIC_BIN" <<'STUB'
@@ -106,7 +110,17 @@ case "$sub" in
     for a in "$@"; do [[ "$prev" == "--target" ]] && tgt="$a"; prev="$a"; done
     [[ -n "$tgt" ]] && { mkdir -p "$tgt/etc"; echo restored > "$tgt/etc/x.conf"; }
     echo "restoring <snapshot> to ${tgt}"; exit 0 ;;
-  forget|prune|ls|dump|stats)
+  ls)
+    # ls --json：备份后「快照里真有文件吗」复核用（MOCK_EMPTY_SNAP=1 → 空快照，用于反向断言）
+    [[ -f "${MOCK_STATE}/repo_created" ]] || { echo "Fatal: unable to open config file" >&2; exit 1; }
+    if [[ "${MOCK_EMPTY_SNAP:-0}" == "1" ]]; then
+      echo '{"name":"emptydir","type":"dir","path":"/x"}'
+    else
+      echo '{"name":"app.conf","type":"file","path":"/etc/app.conf"}'
+      echo '{"name":"id_ed25519","type":"file","path":"/root/.ssh/id_ed25519"}'
+    fi
+    exit 0 ;;
+  forget|prune|dump|stats)
     [[ -f "${MOCK_STATE}/repo_created" ]] || { echo "Fatal: unable to open config file" >&2; exit 1; }
     [[ -f "${MOCK_STATE}/locked" ]] && { echo "unable to create lock in backend: repository is already locked by PID 999" >&2; exit 1; }
     echo "ok $sub"; exit 0 ;;
@@ -148,7 +162,9 @@ chk "全部 lib 语法正确" "bash -n ${TOOL_DIR}/lib/*.sh"
 chk "无 [[ -r /dev/tty ]] 伪判据（仅注释可提）" \
     "! grep -nE '^[^#]*\\[\\[ *-r +/dev/tty' ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh"
 chk "包管理器探测用 if/elif 而非 && 链" \
-    "grep -q 'if command -v apk' ${TOOL_DIR}/lib/common.sh && ! grep -qE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' ${TOOL_DIR}/lib/common.sh"
+    "grep -q 'if command -v apk' ${TOOL_DIR}/lib/pkg.sh && ! grep -qE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' ${TOOL_DIR}/lib/pkg.sh"
+chk "拆分后模块齐全（common/interact/pkg/restic 各司其职）" \
+    "for f in common interact pkg restic deps exclude backup paths repo retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done"
 chk "单文件 ≤200 行（架构规约）" \
     "! awk 'END{if(NR>200) exit 1}' ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh 2>/dev/null | grep ."
 
@@ -257,6 +273,38 @@ chk "status 的凭证自检能发现该问题" "snap status >/dev/null; ! grep -
 rm -f "$VP_EXCLUDE_FILE"; run backup core >/dev/null
 
 echo ""
+echo "=== [E2] 备份路径自定义 + 排除表管理 ==="
+"$TOOL" paths set data "$TMPDATA/data" >/dev/null 2>&1
+chk "paths set 接受合法绝对路径并写 env" "grep -qF 'VP_BACKUP_DATA_PATHS=\"$TMPDATA/data\"' '$VP_ENV_FILE'"
+chk "paths set 拒绝相对路径" "[[ \"\$(snap paths set data relative/path)\" != '0' ]]"
+chk "paths set 拒绝被排除表挡掉的路径" "[[ \"\$(snap paths set data /tmp)\" != '0' ]]"
+snap paths show >/dev/null
+chk "paths show 列出两层路径" "grep -q 'core' '$TMP/snap.out' && grep -q 'data' '$TMP/snap.out'"
+chk "paths show 做体检（报告可备份/被挡/不存在）" "grep -qE '(可备份|被排除表挡掉|不存在)' '$TMP/snap.out'"
+chk "paths check 能识别排除冲突" \
+    "[[ \"\$(rune VP_BACKUP_DATA_PATHS=/tmp paths check data)\" != '0' ]] && grep -q '被排除表挡掉' '$TMP/err'"
+snap exclude list >/dev/null
+chk "exclude list 输出排除表" "grep -q '/etc/restic-password' '$TMP/snap.out'"
+snap exclude add "$TMP/skipme" >/dev/null
+chk "exclude add 追加模式" "grep -qxF '$TMP/skipme' '$VP_EXCLUDE_FILE'"
+snap exclude remove "$TMP/skipme" >/dev/null
+chk "exclude remove 移除模式" "! grep -qxF '$TMP/skipme' '$VP_EXCLUDE_FILE'"
+chk "exclude remove 拒绝移除凭证模式（防自噬）" \
+    "[[ \"\$(snap exclude remove /etc/restic-password)\" != '0' ]] && grep -q '拒绝移除凭证排除项' '$TMP/snap.out'"
+
+echo ""
+echo "=== [E3] 备份有效性复核（防「成功但 0 文件」） ==="
+export MOCK_EMPTY_SNAP=1
+RC="$(run backup data)"
+chk "快照 0 文件 → 备份失败（不再假报成功）" "[[ '$RC' != '0' ]]"
+chk "失败原因明确（指向排除表/空目录）" "grep -q '备份了 0 个文件' '$TMP/err'"
+unset MOCK_EMPTY_SNAP
+RC="$(run backup data)"
+chk "有文件时备份成功" "[[ '$RC' == '0' ]]"
+chk "成功信息含文件数复核" "grep -qE '含 [0-9]+ 个文件' '$TMP/err'"
+chk "复核用 ls --json 数文件（非 stats 累计）" "grep -q 'ls --json' '$MOCK_STATE/restic.log'"
+
+echo ""
 echo "=== [F] 分层备份命令形态 ==="
 : > "$MOCK_STATE/restic.log"
 RC="$(run backup all)"
@@ -265,6 +313,7 @@ chk "core 层带 --tag core" "grep -q -- '--tag core' '$MOCK_STATE/restic.log'"
 chk "data 层带 --tag data" "grep -q -- '--tag data' '$MOCK_STATE/restic.log'"
 chk "快照 host 标签为 VP_HOST" "grep -q -- '--host testhost' '$MOCK_STATE/restic.log'"
 chk "备份后实测列出快照（服务端状态复核）" "grep -q 'snapshots --json --tag' '$MOCK_STATE/restic.log'"
+chk "备份后复核快照内文件数" "grep -q 'ls --json' '$MOCK_STATE/restic.log'"
 chk "repo URL 形态 rclone:<remote>:<base>/<host>" \
     "snap status >/dev/null; grep -q 'rclone:gdrive:vps-backup/testhost' '$TMP/snap.out'"
 chk "未知层名被拒绝" "[[ \"\$(run backup bogus)\" != '0' ]]"
@@ -427,6 +476,9 @@ chk "-h 输出子命令清单" "$TOOL -h | grep -q 'vps-backup restore'"
 chk "未知子命令返回非零" "[[ \"\$(run bogus)\" != '0' ]]"
 chk "usage 提到凭证不入包设计" "$TOOL -h | grep -q '凭证不入包'"
 chk "usage 提到 connect/init 分离" "$TOOL -h | grep -q 'connect 与 init 严格分离'"
+chk "usage 提到路径可自定义" "$TOOL -h | grep -q '路径完全可自定义'"
+chk "usage 列出 paths 子命令" "$TOOL -h | grep -q 'vps-backup paths'"
+chk "usage 列出 exclude 子命令" "$TOOL -h | grep -q 'vps-backup exclude'"
 
 echo ""
 echo "=== [N] 注册表契约（install.sh）==="
