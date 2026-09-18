@@ -144,7 +144,14 @@ cat > "$VP_RCLONE_BIN" <<'STUB'
 echo "rclone $*" >> "${MOCK_STATE}/rclone.log"
 case "${1:-}" in
   version)     echo "rclone v1.75.1" ;;
-  listremotes) [[ "${MOCK_NO_REMOTE:-0}" == "1" ]] || echo "gdrive:" ;;
+  config)      echo "Configuration file is stored at:"; echo "${MOCK_CFG_PATH:-/root/.config/rclone/rclone.conf}" ;;
+  # MOCK_NO_REMOTE=1 → 一个 remote 都没有（真的没配）
+  # MOCK_RCLONE_NOCFG=1 → 配置文件读不了（语法错/路径不存在）→ rclone 非零退出
+  listremotes)
+    [[ "${MOCK_RCLONE_NOCFG:-0}" == "1" ]] && {
+      echo "CRITICAL: Failed to load config file \"${MOCK_CFG_PATH:-/root/.config/rclone/rclone.conf}\": could not parse line: [gdrive" >&2
+      exit 1; }
+    [[ "${MOCK_NO_REMOTE:-0}" == "1" ]] || echo "${MOCK_REMOTE_NAME:-gdrive}:" ;;
   lsd)         [[ "${MOCK_REMOTE_DOWN:-0}" == "1" ]] && { echo "Failed to ls: token expired" >&2; exit 1; }; echo "          -1 2026-09-19 00:00:00        -1 vps-backup" ;;
   about)       echo "Total:   15 GiB"; echo "Used:    1.2 GiB"; echo "Free:    13.8 GiB" ;;
   *)           exit 0 ;;
@@ -163,8 +170,8 @@ chk "无 [[ -r /dev/tty ]] 伪判据（仅注释可提）" \
     "! grep -nE '^[^#]*\\[\\[ *-r +/dev/tty' ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh"
 chk "包管理器探测用 if/elif 而非 && 链" \
     "grep -q 'if command -v apk' ${TOOL_DIR}/lib/pkg.sh && ! grep -qE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' ${TOOL_DIR}/lib/pkg.sh"
-chk "拆分后模块齐全（common/interact/pkg/restic 各司其职）" \
-    "for f in common interact pkg restic deps exclude backup paths repo retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done"
+chk "拆分后模块齐全（common/interact/pkg/restic/remote 各司其职）" \
+    "( for f in common interact pkg restic deps exclude backup paths repo remote retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done )"
 chk "单文件 ≤200 行（架构规约）" \
     "! awk 'END{if(NR>200) exit 1}' ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh 2>/dev/null | grep ."
 
@@ -214,6 +221,71 @@ chk "密码文件为空 → 拒绝" "[[ '$RC' != '0' ]]"
 
 printf 'correct-horse\n' > "$VP_PASSWORD_FILE"; chmod 600 "$VP_PASSWORD_FILE"
 
+# ---------- [C2] repo 密码引导（首次部署无出路 → 2026-09-19 真机故障回归） ----------
+# 背景：真机上 /etc/restic-password 不存在，而向导**没有生成密码的步骤** →
+# 首次部署被 fail-closed 拦下，却只被告知「从 Bitwarden 取回」（此时还没有 repo，
+# Bitwarden 里自然也没有）。契约：向导必须能创建密码；已存在则绝不覆盖。
+echo ""
+echo "=== [C2] repo 密码引导（首次部署） ==="
+rm -f "$VP_PASSWORD_FILE"
+# 非交互（无 TTY、无 VP_PASSWORD）→ 必须失败，且【不得】凭空造密码
+: > "$MOCK_STATE/restic.log"
+RC="$(env -u VP_PASSWORD "$TOOL" password >"$TMP/out" 2>"$TMP/err" </dev/null; echo $?)"
+chk "无 TTY 且未提供 VP_PASSWORD → 拒绝（rc≠0）" "[[ '$RC' != '0' ]]"
+chk "拒绝时不得凭空生成密码文件" "[[ ! -f '$VP_PASSWORD_FILE' ]]"
+chk "给出可执行的手工创建命令" "grep -q 'umask 077' '$TMP/err'"
+# 非交互显式提供 VP_PASSWORD → 落盘 600
+RC="$(VP_PASSWORD='s3cret-horse' "$TOOL" password >"$TMP/out" 2>"$TMP/err"; echo $?)"
+chk "VP_PASSWORD 显式提供 → 落盘成功" "[[ '$RC' == '0' && -f '$VP_PASSWORD_FILE' ]]"
+chk "落盘权限为 600" "[[ \"\$(stat -c '%a' '$VP_PASSWORD_FILE')\" == '600' ]]"
+chk "内容与提供值一致" "[[ \"\$(cat '$VP_PASSWORD_FILE')\" == 's3cret-horse' ]]"
+chk "落盘后强制提示存入 Bitwarden" "grep -q 'Bitwarden' '$TMP/err'"
+# 幂等 / 防覆盖：已存在时 password 子命令不得改写
+RC="$(VP_PASSWORD='other' "$TOOL" password >"$TMP/out" 2>"$TMP/err"; echo $?)"
+chk "密码已存在 → 拒绝覆盖（rc=0 且内容不变）" \
+    "[[ '$RC' == '0' && \"\$(cat '$VP_PASSWORD_FILE')\" == 's3cret-horse' ]]"
+chk "已存在时明确「工具不覆盖」" "grep -q '不覆盖' '$TMP/err'"
+# 恢复场景文案：密码缺失时的指引必须同时覆盖首次/恢复两条路径
+rm -f "$VP_PASSWORD_FILE"
+run connect >/dev/null
+chk "密码缺失指引含「首次部署」路径" "grep -q '首次部署' '$TMP/err'"
+chk "密码缺失指引含「恢复场景」路径" "grep -q '恢复场景' '$TMP/err'"
+printf 'correct-horse\n' > "$VP_PASSWORD_FILE"; chmod 600 "$VP_PASSWORD_FILE"
+
+# ---------- [C3] 二进制解析规则必须与调用点一致 ----------
+# 背景：调用点用 `"${VP_RESTIC_BIN}"`（绝对路径），而旧体检写成
+# 「路径可执行 || PATH 有 restic」→ 变量指向不存在路径时**体检通过、一调用就炸**
+# （本地调试实测：「restic 存在但无法执行: /nonexistent/restic」）。
+# 契约：解析规则 = ① 变量路径可执行则用；② 否则取 PATH 上的命令并**改写变量**。
+echo ""
+echo "=== [C3] 二进制解析规则 ==="
+# ⚠️ declare -F 自检必须在**加载了 lib 的子进程**里做：harness 自身不 source 被测库，
+#    直接在本进程断言会恒失败（本次自伤一次）。
+chk "静态：解析函数存在（防函数未定义时断言假通过）" \
+    "bash -c \"source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; source '$TOOL_DIR/lib/restic.sh' >/dev/null 2>&1; declare -F vp_resolve_bin >/dev/null\""
+# 反例①：变量指向不存在的路径，但 PATH 上有真 restic → 必须解析成功并改写变量
+: > "$MOCK_STATE/restic.log"
+RC="$(env VP_RESTIC_BIN=/nonexistent/restic PATH="$MOCK_BIN:$PATH" \
+      bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; \
+               source '$TOOL_DIR/lib/restic.sh' >/dev/null 2>&1; \
+               VP_RESTIC_BIN=/nonexistent/restic; \
+               vp_have_restic && printf '%s' \"\$VP_RESTIC_BIN\"" 2>/dev/null; echo "|$?")"
+chk "变量指向不存在路径 → 回退解析到 PATH 上的绝对路径" \
+    "[[ '${RC%|*}' == '$MOCK_BIN/restic' && '${RC##*|}' == '0' ]]"
+# 反例②：解析成功但二进制跑不起来 → 必须报「存在但无法执行」（不能只说"未安装"）
+cat > "$TMP/broken-restic" <<'STUB'
+#!/usr/bin/env bash
+echo "cannot execute: required file not found" >&2
+exit 127
+STUB
+chmod +x "$TMP/broken-restic"
+export VP_RESTIC_BIN="$TMP/broken-restic"
+run connect >/dev/null
+chk "二进制不可执行 → 报「存在但无法执行」" "grep -q '存在但无法执行' '$TMP/err'"
+chk "二进制不可执行 → 给出重装命令（可执行指引）" "grep -q 'vps-backup deps' '$TMP/err'"
+chk "二进制不可执行 → 不误报为「未安装」" "! grep -q '未安装' '$TMP/err'"
+export VP_RESTIC_BIN="$MOCK_BIN/restic"
+
 echo ""
 echo "=== [D] connect 与 init 严格分离 ==="
 touch "$MOCK_STATE/repo_created"
@@ -241,8 +313,22 @@ rm -f "$MOCK_STATE/repo_created"
 cat > "$VP_RESTIC_BIN.init-silent" <<'STUB'
 #!/usr/bin/env bash
 echo "restic $*" >> "${MOCK_STATE}/restic.log"
-[[ "$*" == *" init"* ]] && { echo "created restic repository abc123"; exit 0; }
-echo "Fatal: unable to open config file" >&2; exit 1
+# ⚠️ 子命令解析必须与主 mock 一致（详见主 mock 处注释）：
+#   写成 `[[ "$*" == *" init"* ]]` 只在 init 位于**行尾**时命中，参数一变就漏匹配；
+#   且必须实现 `version` —— vp_tools_check 的二段式体检会先跑它，
+#   否则体检先失败，init 场景根本没被构造出来。
+sub=""
+for a in "$@"; do
+  case "$a" in
+    init|cat|version|snapshots|backup|check|restore|forget|prune|ls|list|dump|stats|unlock)
+      sub="$a"; break ;;
+  esac
+done
+case "$sub" in
+  version) echo "restic 0.19.1 compiled with go1.24"; exit 0 ;;
+  init)    echo "created restic repository abc123"; exit 0 ;;
+  *)       echo "Fatal: unable to open config file" >&2; exit 1 ;;
+esac
 STUB
 chmod +x "$VP_RESTIC_BIN.init-silent"
 cp "$VP_RESTIC_BIN" "$TMP/restic.real"
@@ -466,8 +552,84 @@ chk "remote 不可用时报错并给重授权提示" "! grep -q 'rclone remote �
 unset MOCK_REMOTE_DOWN
 export MOCK_NO_REMOTE=1
 snap status >/dev/null
-chk "remote 未配置时给出 rclone config 指引" "grep -q 'rclone remote 未配置' '$TMP/snap.out'"
+chk "一个 remote 都没有时给出 rclone config 指引" "grep -q 'rclone config' '$TMP/snap.out'"
 unset MOCK_NO_REMOTE
+
+# ---------- [L2] remote 分态诊断（2026-09-19 用户真机故障回归） ----------
+# 背景：用户报「已配置 rclone config 为何还提示 remote 未配置」——真机根因是
+# **remote 名不匹配**（机器上叫 gdrive-remote，env 默认写 gdrive）。
+# 原实现 `listremotes | grep -qx` + `2>/dev/null` 让四种不同故障输出同一句误导文案。
+# 契约：① 名字不匹配必须打印【实有 remote 名】+ 两条可执行修正路径；
+#       ② 配置文件读不了（rclone 非零退出）必须报「无法读取配置」而非「未配置 remote」；
+#       ③ 真·空配置仍给 rclone config 指引；④ 各态不得误报成功。
+echo ""
+echo "=== [L2] remote 分态诊断（真机故障回归） ==="
+export MOCK_REMOTE_NAME="gdrive-remote"      # 机器上真实名字与 env 的 gdrive 不同
+: > "$MOCK_STATE/rclone.log"
+snap status >/dev/null
+chk "名字不匹配 → 报「名不匹配」而非「未配置」" "grep -q '名不匹配' '$TMP/snap.out'"
+chk "名字不匹配 → 打印 rclone 实有 remote 名" "grep -q 'gdrive-remote' '$TMP/snap.out'"
+chk "名字不匹配 → 给出两条修正路径（改 env / 改 rclone）" \
+    "grep -q 'VP_RCLONE_REMOTE' '$TMP/snap.out' && grep -q 'rclone config' '$TMP/snap.out'"
+chk "名字不匹配 → 明确「裸名」约束（防拼出双冒号路径）" "grep -q '裸名' '$TMP/snap.out'"
+chk "名字不匹配 → 不得误报 remote 可用" "! grep -q 'rclone remote 可用' '$TMP/snap.out'"
+# 反事实：把 env 名字改成实有名字 → 必须立刻转为成功
+export VP_RCLONE_REMOTE="gdrive-remote"
+snap status >/dev/null
+chk "反事实：名字改对后即报可用（证明判据本身没错）" "grep -q 'rclone remote 可用: gdrive-remote:' '$TMP/snap.out'"
+# 反事实对照：改回错误名字 → 必须再次报失败（⚠️ MOCK_REMOTE_NAME 仍为 gdrive-remote，
+# 否则 mock 退回 gdrive、恰好与错误名字"匹配"，测的就不是这个场景了）
+export VP_RCLONE_REMOTE="gdrive"
+snap status >/dev/null
+chk "反事实对照：改回错误名字又报失败" "grep -q '名不匹配' '$TMP/snap.out'"
+unset MOCK_REMOTE_NAME
+
+export MOCK_RCLONE_NOCFG=1
+export MOCK_CFG_PATH="$TMP/rclone.conf"
+snap status >/dev/null
+chk "配置读不了 → 报「无法读取配置文件」" "grep -q '无法读取配置文件' '$TMP/snap.out'"
+chk "配置读不了 → 透出 rclone 原始错误（不吞 stderr）" "grep -q 'could not parse line' '$TMP/snap.out'"
+chk "配置读不了 → 打印配置文件位置" "grep -q '$TMP/rclone.conf' '$TMP/snap.out'"
+chk "配置读不了 → 不误报为「未配置 remote」" "! grep -q '名不匹配' '$TMP/snap.out'"
+unset MOCK_RCLONE_NOCFG MOCK_CFG_PATH
+
+echo ""
+echo "=== [W] 向导全流程（步骤编号 + 密码步骤） ==="
+# 背景：向导原先无密码步骤，首次部署被 fail-closed 拦下却无出路；
+# 且加步骤后必须同步改编号（否则用户看到 [3/6] 之后跳到 [5/6]，误以为漏了步骤）。
+#
+# ⚠️ 驱动方式：向导的每个 confirm 用 read_input 从 **/dev/tty** 读，**忽略 stdin**
+#    （这是「curl | bash」场景的正确设计）。因此喂 stdin 管道无效，必须给真 pty。
+# ⚠️⚠️ 且必须显式 VP_YES=0：harness 全局设了 VP_YES=1（给其他用例免交互），
+#    而 confirm 在 VP_YES=1 时**直接返回 0**，压根不读输入 → 向导会在
+#    「是否修改备份范围」处把默认当"是"→ 打印"请编辑后重跑"并 rc=1 终止，
+#    看起来像向导坏了（本次自伤一轮）。用 pty + 4 次回车（默认 N）走完全程。
+#    脚本写到真实文件再 pty 执行 —— 别用多层引号内嵌（引号层会吃掉路径，见既有教训）。
+cat > "$TMP/wizard-drive.sh" <<'DRIVE'
+#!/usr/bin/env bash
+# 用法: wizard-drive.sh <工具路径>   （应答序列由 stdin 提供）
+exec "$1" wizard
+DRIVE
+chmod +x "$TMP/wizard-drive.sh"
+: > "$MOCK_STATE/restic.log"
+if command -v script >/dev/null 2>&1; then
+  RC="$(printf '\n\n\n\n' | env VP_YES=0 script -qec "$TMP/wizard-drive.sh $TOOL" /dev/null >"$TMP/wiz.out" 2>&1; echo $?)"
+else
+  # util-linux 缺失（极简容器）→ 明确跳过而非假绿
+  echo "SKIP: 无 script(1)，无法分配 pty 驱动向导；本组断言未执行"
+  RC="SKIP"
+  : > "$TMP/wiz.out"
+fi
+chk "向导跑通（rc=0）" "[[ '$RC' == '0' ]]"
+chk "步骤编号连续 1/7 … 7/7（无跳号）" \
+    "( for i in 1 2 3 4 5 6 7; do grep -q \"\[\$i/7\]\" '$TMP/wiz.out' || exit 1; done )"
+chk "步骤总数声明一致（无残留 /6）" "! grep -qE '\\[[0-9]/6\\]' '$TMP/wiz.out'"
+chk "向导含 repo 密码步骤（首次部署的唯一出路）" "grep -q 'repo 密码' '$TMP/wiz.out'"
+chk "向导先过密码再连 repo（顺序正确）" \
+    "awk '/\\[2\\/7\\] repo 密码/{p=NR} /\\[3\\/7\\] repo 连接/{c=NR} END{exit !(p && c && p<c)}' '$TMP/wiz.out'"
+chk "向导最终完成并给出 runbook 路径" "grep -q '向导完成' '$TMP/wiz.out'"
+# 密码已存在时向导必须直接跳过，不得重复询问（幂等）
+chk "密码已存在 → 不重复询问生成" "! grep -q '自动生成强密码' '$TMP/wiz.out'"
 
 echo ""
 echo "=== [M] CLI 契约 ==="

@@ -89,7 +89,7 @@ sudo bash install.sh install vnstat-monitor
 | [docker-install](utils/docker-install/) | utils | Docker 官方源安装 + **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker)，固定版本 + sha256 校验）+ 非暴露模式 + 非 root 管理 + 权限体检 | curl, iptables, ufw | 多文件（8 lib） |
 | [nginx-install](web/nginx-install/) | web | nginx 官方源安装（stable/mainline）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 摘要）+ apt Pin-Priority 900 + 体检 | curl, gnupg/openssl, apt/dnf/apk | 多文件（6 lib） |
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl | 单文件 |
-| [vps-backup](backup/vps-backup/) | backup | **restic + rclone(GDrive) 备份与灾难恢复**：core/data 分层；保留策略 forget+prune；每周完整性抽查；**凭证不入包**；connect/init 严格分离；Telegram 失败告警；自动生成恢复 runbook | restic, rclone（自带 sha256 校验安装）, curl | 多文件（14 lib） |
+| [vps-backup](backup/vps-backup/) | backup | **restic + rclone(GDrive) 备份与灾难恢复**：core/data 分层；保留策略 forget+prune；每周完整性抽查；**凭证不入包**；connect/init 严格分离；**repo 密码引导**；remote 名分态诊断；Telegram 失败告警；自动生成恢复 runbook | restic, rclone（自带 sha256 校验安装）, curl | 多文件（15 lib） |
 
 ---
 
@@ -273,7 +273,8 @@ sudo vps-bench tcpquality    # TcpQuality 测速
 
 ```bash
 sudo vps-backup deps                # 安装 restic + rclone（官方二进制 + sha256 校验，fail-closed）
-sudo vps-backup                     # 向导：依赖 → repo 连接 → 范围 → 通知 → timer → runbook
+sudo vps-backup                     # 向导：依赖 → 密码 → repo 连接 → 范围 → 通知 → timer → runbook
+sudo vps-backup password            # 设定 repo 密码（仅首次；已存在则拒绝覆盖）
 sudo vps-backup init                # 首次初始化 repo（已存在则拒绝）
 sudo vps-backup backup core         # 立刻备一次 core
 sudo vps-backup snapshots           # 看快照（只读）
@@ -281,6 +282,16 @@ sudo vps-backup restore latest --tag core --target /tmp/restore
 sudo vps-backup status              # repo/依赖/remote/快照新鲜度/timer/凭证自检
 sudo vps-backup runbook             # 生成灾难恢复文档（/root/VPS-RESTORE.md）
 ```
+
+**repo 密码（首次部署必读）**：向导的 `[2/7]` 步骤会引导生成或录入密码并落盘
+`/etc/restic-password`（600）。**该密码是唯一的钥匙（restic 无后门），丢失 = 备份永久不可读**，
+落盘后必须立刻存入 Bitwarden。非交互场景用 `VP_PASSWORD=<密码> vps-backup password`
+（不提供则拒绝，工具**绝不**凭空生成一把你不知道的密码）。已有密码时工具**永不覆盖**。
+
+**rclone remote 名必须逐字符一致**：`VP_RCLONE_REMOTE` 只填**裸名**（如 `gdrive`），
+不带冒号/路径，且必须等于 `rclone listremotes` 里的名字。名字不一致是最常见的故障，
+症状是「明明配好了却报 remote 未配置」——v1.3.0 起工具会打印 rclone 实有 remote 名
+与两条修正路径（改 env / 改 rclone），不再只给一句误导文案。
 
 **备份路径完全可自定义**（分层只是默认建议，不是硬编码）：
 
@@ -376,7 +387,7 @@ vps-tools/
 ├── backup/                 # 备份类
 │   └── vps-backup/
 │       ├── vps-backup.sh           # 入口
-│       ├── lib/                    # common/interact/pkg/restic/exclude/paths/deps/
+│       ├── lib/                    # common/interact/pkg/restic/remote/exclude/paths/deps/
 │       │                           #   repo/backup/retention/restore/timer/status/usage
 │       └── templates/vps-backup.env.example
 └── tests/                  # 回归测试（run-all.sh = 统一入口）
@@ -397,7 +408,7 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 
 | 套件 | 断言 | 说明 |
 |---|---|---|
-| `verify-vps-backup.sh` | 141 | vps-backup 回归（mock，无需 root/网络） |
+| `verify-vps-backup.sh` | 175 | vps-backup 回归（mock，无需 root/网络） |
 | `verify-nginx-install.sh` | 72 | nginx-install 回归（mock）⚠️ 1 既存 FAIL |
 | `verify-xray-deploy-routing.sh` | 56 | xray 分流规则 |
 | `verify-docker-install.sh` | 53 | docker-install 回归（mock） |

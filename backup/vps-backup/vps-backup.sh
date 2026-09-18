@@ -21,7 +21,7 @@
 # 配置: /etc/vps-backup.env（600）；密码: /etc/restic-password（600）
 # 铁律: 凭证不入备份包；connect 与 init 严格分离；报成功前实测服务端状态
 
-VP_VERSION="1.2.0"
+VP_VERSION="1.3.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -37,6 +37,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/deps.sh"
 # shellcheck source=lib/repo.sh
 . "${SCRIPT_DIR}/lib/repo.sh"
+# shellcheck source=lib/remote.sh
+. "${SCRIPT_DIR}/lib/remote.sh"
 # shellcheck source=lib/exclude.sh
 . "${SCRIPT_DIR}/lib/exclude.sh"
 # shellcheck source=lib/backup.sh
@@ -62,12 +64,19 @@ wizard() {
   echo "" >&2
 
   # 1) 依赖
-  log_info "[1/6] 依赖（restic + rclone，官方二进制 + sha256 校验）"
+  log_info "[1/7] 依赖（restic + rclone，官方二进制 + sha256 校验）"
   vp_deps_main || { log_err "依赖安装失败，终止向导"; return 1; }
   echo "" >&2
 
-  # 2) repo 连接（不 init）
-  log_info "[2/6] repo 连接"
+  # 2) repo 密码（首次部署的唯一钥匙；已存在则跳过，绝不覆盖）
+  log_info "[2/7] repo 密码"
+  vp_password_setup || { log_err "repo 密码未就绪，终止向导"; return 1; }
+  vp_require_password || { log_err "repo 密码不可用，终止向导"; return 1; }
+  log_ok "repo 密码就绪: ${VP_PASSWORD_FILE}"
+  echo "" >&2
+
+  # 3) repo 连接（不 init）
+  log_info "[3/7] repo 连接"
   log_info "  目标 repo: $(vp_repo_url)"
   if vp_remote_check; then
     if vp_repo_connect; then
@@ -79,14 +88,14 @@ wizard() {
       return 1
     fi
   else
-    log_warn "rclone remote 未就绪 —— 请先配置: rclone config"
-    log_warn "（Google Drive 须自建 OAuth client_id；app 需 PUBLISH 否则授权 7 天过期）"
+    # 具体原因与修正指引已由 vp_remote_check 分态打印（名字不匹配/配置损坏/token 过期）
+    log_warn "rclone remote 未就绪 —— 按上方指引修正后重跑: sudo vps-backup"
     return 1
   fi
   echo "" >&2
 
-  # 3) 备份范围确认
-  log_info "[3/6] 备份范围"
+  # 4) 备份范围确认
+  log_info "[4/7] 备份范围"
   log_info "  core（每 ${VP_CORE_INTERVAL_HOURS}h）: ${VP_BACKUP_CORE_PATHS}"
   log_info "  data（每日 ${VP_DATA_ONCALENDAR}）: ${VP_BACKUP_DATA_PATHS}"
   if confirm "是否修改备份范围（改 ${VP_ENV_FILE}）?"; then
@@ -97,8 +106,8 @@ wizard() {
   vp_verify_exclusions || { log_err "凭证排除自检失败，终止向导"; return 1; }
   echo "" >&2
 
-  # 4) 通知
-  log_info "[4/6] 失败告警（Telegram）"
+  # 5) 通知
+  log_info "[5/7] 失败告警（Telegram）"
   if [[ -z "${VP_TG_BOT_TOKEN}" || -z "${VP_TG_CHAT_ID}" ]]; then
     local tok="" chat=""
     if read_input "Telegram bot token（留空跳过）: " tok && [[ -n "$tok" ]]; then
@@ -112,13 +121,13 @@ wizard() {
   vp_notify_test || true
   echo "" >&2
 
-  # 5) timer
-  log_info "[5/6] systemd timer"
+  # 6) timer
+  log_info "[6/7] systemd timer"
   vp_timer_install || { log_err "timer 安装失败"; return 1; }
   echo "" >&2
 
-  # 6) 首次 core 备份 + runbook
-  log_info "[6/6] 首次 core 备份 + 灾难恢复 runbook"
+  # 7) 首次 core 备份 + runbook
+  log_info "[7/7] 首次 core 备份 + 灾难恢复 runbook"
   if confirm "现在执行一次 core 层备份？"; then
     vp_backup_layer core || log_warn "首次备份未成功（排查后: sudo vps-backup backup core）"
   fi
@@ -137,6 +146,16 @@ main() {
 
     connect)  load_env; vp_repo_connect ;;
     init)     require_root; load_env; vp_repo_init ;;
+
+    password)
+      require_root; load_env
+      # 契约：已存在即拒绝覆盖（密码丢失=数据永久不可读，绝不代劳改密码）
+      if [[ -f "${VP_PASSWORD_FILE}" ]]; then
+        log_ok "repo 密码已存在: ${VP_PASSWORD_FILE}（工具不覆盖；如需更换请手工操作并同步 Bitwarden）"
+      else
+        vp_password_setup || return 1
+      fi
+      ;;
 
     backup)   require_root; load_env; vp_backup_main "${2:-all}" "${@:3}" ;;
     snapshots) load_env; vp_snapshots "${@:2}" ;;

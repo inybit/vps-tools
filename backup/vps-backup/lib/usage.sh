@@ -8,8 +8,9 @@ usage() {
 vps-backup ${VP_VERSION} — restic + rclone(Google Drive) VPS 备份与灾难恢复
 
 用法:
-  vps-backup                         向导: 依赖 → repo 连接 → 备份范围 → 通知 → timer → runbook
+  vps-backup                         向导: 依赖 → 密码 → repo 连接 → 范围 → 通知 → timer → runbook
   vps-backup deps                    安装/更新 restic + rclone（官方二进制 + sha256 校验）
+  vps-backup password                设定 repo 密码（仅首次；已存在则拒绝覆盖）
   vps-backup connect                 只连接 repo 校验（**不 init**，恢复场景用）
   vps-backup init                    初始化 repo（仅首次；已存在则拒绝，不覆盖）
   vps-backup backup [core|data|all]  执行备份（默认 all）

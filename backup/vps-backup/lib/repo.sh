@@ -119,22 +119,3 @@ vp_unlock() {  # $1=--dry-run|--all（空=清陈旧锁）
   return 1
 }
 
-# rclone remote 体检（配置是否存在、能否列出根目录）
-vp_remote_check() {
-  vp_have_rclone || { log_err "rclone 未安装"; return 1; }
-  if ! "${VP_RCLONE_BIN}" listremotes 2>/dev/null | grep -qx "${VP_RCLONE_REMOTE}:"; then
-    log_err "rclone remote 未配置: ${VP_RCLONE_REMOTE}"
-    log_err "  配置: rclone config   （Google Drive → 自建 OAuth client_id，见 runbook）"
-    return 1
-  fi
-  if ! "${VP_RCLONE_BIN}" lsd "${VP_RCLONE_REMOTE}:" >/dev/null 2>&1; then
-    log_err "rclone remote 存在但无法访问（token 过期？授权 7 天到期？）"
-    log_err "  重授权: rclone config reconnect ${VP_RCLONE_REMOTE}:"
-    return 1
-  fi
-  log_ok "rclone remote 可用: ${VP_RCLONE_REMOTE}:"
-  local about
-  about="$("${VP_RCLONE_BIN}" about "${VP_RCLONE_REMOTE}:" 2>/dev/null | tr '\n' ' ')"
-  [[ -n "$about" ]] && log_info "配额: ${about}"
-  return 0
-}

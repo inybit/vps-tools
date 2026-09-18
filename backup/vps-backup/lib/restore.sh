@@ -139,6 +139,9 @@ sudo vps-backup restore latest --tag data --target /var/lib/docker/volumes
 
 - \`Fatal: wrong password\` → repo 密码错（不是备份坏了）
 - \`cannot find remote\` / \`token expired\` → rclone remote 未配 / 授权过期（reconnect）
+- \`remote 名不匹配\` → ${VP_ENV_FILE} 的 VP_RCLONE_REMOTE 与 \`rclone listremotes\` 的名字不一致
+  （只填裸名，不带冒号/路径；工具会打印实有名字）
+- \`无法读取配置文件\` → rclone 配置语法错或路径不存在（工具会透出 rclone 原始报错）
 - \`failed to open repository\` → 网络不可达或 repo 路径写错（VP_REPO_BASE/VP_HOST）
 - 上传中断于 ~750GiB → GDrive 每日上传限额，次日增量续跑即可
 EOF
