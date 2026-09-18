@@ -66,11 +66,20 @@ echo
 
 # ---------- B. 动态：-v / -h ----------
 echo "[B] 入口命令"
-ck "-v 输出" "$(bash "$MAIN" -v 2>&1)" "xray-deploy 1.6.2"
-ck "--version 输出" "$(bash "$MAIN" --version 2>&1)" "xray-deploy 1.6.2"
+# ⚠️ 版本号从主脚本读，不硬编码（否则每次发版都要改测试）
+VER="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$MAIN" | head -1)"
+ck "-v 输出" "$(bash "$MAIN" -v 2>&1)" "xray-deploy ${VER}"
+ck "--version 输出" "$(bash "$MAIN" --version 2>&1)" "xray-deploy ${VER}"
 bash "$MAIN" -h > "${TMP}/h-new.txt" 2>&1
-bash "$ORIG" -h > "${TMP}/h-old.txt" 2>&1
-ck "-h 输出与拆分前逐字一致" "$(diff -q "${TMP}/h-old.txt" "${TMP}/h-new.txt" >/dev/null 2>&1 && echo same)" "same"
+ck "-h 版本号正确" "$(grep -c "xray-deploy ${VER}" "${TMP}/h-new.txt")" "1"
+# 拆分前逐字一致只在阶段 1 成立（此后版本与内容演进）；
+# 改为断言"原有段落未丢失"——这是真正要守的回归防线。
+for seg in '协议说明:' 'vless-reality  VLESS-TCP-XTLS-Vision-REALITY' \
+           'vless-xhttp-reality' 'hysteria2' '客户端兼容性:'; do
+  # ⚠️ 用 -ge 1：同一关键词在帮助里可能出现多次（如 hysteria2 在协议说明+兼容性段）
+  ck "-h 保留段落: ${seg}" \
+    "$([[ "$(grep -cF "$seg" "${TMP}/h-new.txt")" -ge 1 ]] && echo ok)" "ok"
+done
 echo
 
 # ---------- C. 动态：未知命令提示 ----------
@@ -134,7 +143,7 @@ ck "proto_exists 已知协议" "$(grep -oP 'pe1=\K.*' <<<"$fo")" "yes"
 ck "proto_exists 未知协议" "$(grep -oP 'pe2=\K.*' <<<"$fo")" "no"
 ck "proto_display 返回显示名" "$(grep -oP 'pd=\K.*' <<<"$fo")" "VLESS-TCP-XTLS-Vision-REALITY|xray"
 ck "FALLBACK_CANDIDATES 非空（≥100）" "$([[ "$(grep -oP 'cands=\K\d+' <<<"$fo")" -ge 100 ]] && echo ok)" "ok"
-ck "PROTO_REGISTRY 4 个协议" "$(grep -oP 'protos=\K\d+' <<<"$fo")" "4"
+ck "PROTO_REGISTRY 协议数与磁盘一致" "$(grep -oP 'protos=\K\d+' <<<"$fo")" "5"
 ck "xray_asset_suffix 正常" "$(grep -oP 'asset=\K.*' <<<"$fo")" "linux-64.zip"
 echo
 

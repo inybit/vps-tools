@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.2"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.8.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,8 +50,14 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 . "${LIB_DIR}/registry.sh"
 . "${LIB_DIR}/client-mihomo.sh"
 . "${LIB_DIR}/client-singbox.sh"
+. "${LIB_DIR}/client-ss2022.sh"
 . "${LIB_DIR}/inbound.sh"
 . "${LIB_DIR}/state.sh"
+. "${LIB_DIR}/ss2022.sh"
+. "${LIB_DIR}/outbound.sh"
+. "${LIB_DIR}/routing.sh"
+. "${LIB_DIR}/chain.sh"
+. "${LIB_DIR}/chain-info.sh"
 . "${LIB_DIR}/proto-wizard.sh"
 . "${LIB_DIR}/proto-crud.sh"
 . "${LIB_DIR}/proto-edit.sh"
@@ -86,8 +92,20 @@ case "$CMD" in
       *)      die "protocol 用法: add|remove|edit|list" ;;
     esac
     ;;
+  chain)
+    case "${2:-show}" in
+      setup)  chain_setup ;;
+      show)   chain_show ;;
+      export) chain_export ;;
+      import) chain_import "${3:-}" ;;
+      test)   chain_test ;;
+      mode)   chain_mode "${3:-show}" ;;
+      remove) chain_remove ;;
+      *)      die "chain 用法: setup|show|export|import|test|mode|remove" ;;
+    esac
+    ;;
   menu) : ;;  # 走交互菜单
-  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/update-geo/upgrade/status/restart/uninstall/protocol）" ;;
+  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/update-geo/upgrade/status/restart/uninstall/protocol/chain）" ;;
 esac
 
 # ============ 交互菜单 ============
@@ -104,9 +122,10 @@ if [[ "$CMD" == "menu" ]]; then
     echo "  7) 查看/编辑配置 (config)"
     echo "  8) 服务状态"
     echo "  9) 重启服务"
-    echo "  10) 卸载"
+    echo "  10) 中转 + 落地（链路）"
+    echo "  11) 卸载"
     echo "  0) 退出"
-    read_input "请选择 [0-10]: " choice || { log_warn "无交互终端，已退出"; break; }
+    read_input "请选择 [0-11]: " choice || { log_warn "无交互终端，已退出"; break; }
     case "${choice:-0}" in
       1) cmd_install ;;
       2)
@@ -149,7 +168,26 @@ if [[ "$CMD" == "menu" ]]; then
         ;;
       8) need_root; service_status ;;
       9) need_root; service_restart ;;
-      10) cmd_uninstall ;;
+      10)
+        echo "  1) 查看链路拓扑  2) 配置链路(向导)  3) 导入落地参数  4) 自检"
+        echo "  5) 切换分流模式  6) 拆除链路  7) 在【落地机】导出上游参数"
+        read_input "选择 [1-7]: " chc || { log_warn "无交互终端"; continue; }
+        case "${chc:-1}" in
+          1) chain_show ;;
+          2) chain_setup ;;
+          3) chain_import ;;
+          4) chain_test ;;
+          5)
+            routing_preset_list
+            read_input "输入模式名（回车取消）: " cm || { continue; }
+            [[ -n "${cm:-}" ]] && chain_mode "$cm" || log_info "已取消"
+            ;;
+          6) chain_remove ;;
+          7) chain_export ;;
+          *) log_warn "无效选择" ;;
+        esac
+        ;;
+      11) cmd_uninstall ;;
       0) break ;;
       *) log_warn "无效选择" ;;
     esac

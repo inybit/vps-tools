@@ -35,6 +35,7 @@ cmd_install() {
     vless-xhttp-reality) params="$(proto_wizard_vless_xhttp_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp)   params="$(proto_wizard_vless_xhttp "$name")" || die "协议参数生成失败" ;;
     hysteria2)     params="$(proto_wizard_hysteria2 "$name")" || die "协议参数生成失败" ;;
+    ss2022)        params="$(proto_wizard_ss2022 "$name")" || die "协议参数生成失败" ;;
     *) die "未知协议类型: $type" ;;
   esac
   state_set --argjson p "$params" '.protocols = [$p]'

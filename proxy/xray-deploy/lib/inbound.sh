@@ -91,36 +91,58 @@ protocol_to_inbound() {  # $1=协议参数 JSON → 输出 inbound JSON（数组
         )
       }' <<<"$json"
       ;;
+    ss2022)
+      # SS2022（shadowsocks 2022）：用于【中转机 → 落地机】这一跳（境外↔境外）。
+      # method 必须是 2022-blake3-*（32 字节 key）；network tcp,udp 同时监听两种协议。
+      # ⚠️ Xray 会打印 deprecated 软警告（PrintNonRemovalDeprecatedFeatureWarning，
+      #    源码注释明确 "won't be removed in the near future"）—— 属正常，非即将移除。
+      jq '{
+        tag: .name, listen: "0.0.0.0", port: .port, protocol: "shadowsocks",
+        settings: {
+          method: .method,
+          password: .password,
+          network: "tcp,udp"
+        }
+      }' <<<"$json"
+      ;;
     *) die "未实现的 inbound 生成: ${type}" ;;
   esac
 }
 
-build_config() {  # 从 state.json 聚合 inbounds + routing
-  local inbounds p
+# 组装 outbounds：默认 freedom(direct) + blackhole(block)；配了链路则追加 landing
+build_outbounds_json() {
+  local base='[
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]'
+  local landing
+  landing="$(gen_landing_outbound 2>/dev/null || true)"
+  if [[ -n "$landing" ]]; then
+    jq -c --argjson l "$landing" '. + [$l]' <<<"$base"
+  else
+    printf '%s' "$base"
+  fi
+}
+
+build_config() {  # 从 state.json 聚合 inbounds + outbounds + routing
+  # routing 规则生成见 lib/routing.sh（build_routing_rules_json）
+  local inbounds p outbounds rules
   inbounds="$(jq -c '.protocols[]' "$STATE_FILE" | while read -r p; do
     protocol_to_inbound "$p"
   done | jq -s -c .)"
   [[ -n "$inbounds" ]] || die "state.json 无任何协议"
 
+  outbounds="$(build_outbounds_json)"
+  rules="$(build_routing_rules_json)"
+
   jq -n \
-    --argjson inbounds "$inbounds" '
+    --argjson inbounds "$inbounds" \
+    --argjson outbounds "$outbounds" \
+    --argjson rules "$rules" '
     {
       log: { loglevel: "warning" },
-      routing: {
-        domainStrategy: "IPIfNonMatch",
-        rules: [
-          { type: "field", outboundTag: "block", domain: ["geosite:category-ads-all"] },
-          { type: "field", outboundTag: "block", protocol: ["bittorrent"] },
-          { type: "field", outboundTag: "block", ip: ["geoip:private"] },
-          { type: "field", outboundTag: "direct", domain: ["geosite:google"] },
-          { type: "field", outboundTag: "block", domain: ["geosite:cn"] },
-          { type: "field", outboundTag: "block", ip: ["geoip:cn"] }
-        ]
-      },
-      outbounds: [
-        { protocol: "freedom", tag: "direct" },
-        { protocol: "blackhole", tag: "block" }
-      ],
+      routing: { domainStrategy: "IPIfNonMatch", rules: $rules },
+      outbounds: $outbounds,
       inbounds: $inbounds
     }' > "${CONFIG_FILE}.tmp"
 

@@ -27,6 +27,7 @@ proto_add() {
     vless-xhttp-reality) params="$(proto_wizard_vless_xhttp_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp|vless-h2) params="$(proto_wizard_vless_xhttp "$name")" || die "协议参数生成失败" ;;
     hysteria2) params="$(proto_wizard_hysteria2 "$name")" || die "协议参数生成失败" ;;
+    ss2022) params="$(proto_wizard_ss2022 "$name")" || die "协议参数生成失败" ;;
     *) die "未实现的协议向导: ${type}" ;;
   esac
 
@@ -52,7 +53,7 @@ proto_remove() {
 
 proto_list_names() {
   log_info "现有协议:"
-  jq -r '.protocols | to_entries[] | "  [\(.key+1)] \(.value.name)  (\(.value.type))  端口 \(.value.port)\(if .value.type == "hysteria2" then "/UDP" else "" end)  \(if (.value.type == "vless-xhttp" or .value.type == "vless-h2") then "域名 " + .value.domain elif .value.type == "hysteria2" then "SNI " + (.value.domain // "-") elif .value.type == "vless-xhttp-reality" then "SNI " + .value.sni + "  path " + .value.path else "SNI " + .value.sni end)"' "$STATE_FILE"
+  jq -r '.protocols | to_entries[] | "  [\(.key+1)] \(.value.name)  (\(.value.type))  端口 \(.value.port)\(if .value.type == "hysteria2" then "/UDP" elif .value.type == "ss2022" then "/TCP+UDP" else "" end)  \(if (.value.type == "vless-xhttp" or .value.type == "vless-h2") then "域名 " + .value.domain elif .value.type == "hysteria2" then "SNI " + (.value.domain // "-") elif .value.type == "vless-xhttp-reality" then "SNI " + .value.sni + "  path " + .value.path elif .value.type == "ss2022" then "method " + .value.method else "SNI " + .value.sni end)"' "$STATE_FILE"
 }
 
 # 解析协议选择：支持序号（[1]）或名称；输出协议 name；找不到 die

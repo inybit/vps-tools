@@ -13,6 +13,7 @@ PROTO_REGISTRY=(
   "vless-xhttp-reality|VLESS-XHTTP-REALITY (XHTTP+XMUX)|xray"
   "vless-xhttp|VLESS-XHTTP-H2-TLS|xray"
   "hysteria2|Hysteria2 (hy2)|xray"
+  "ss2022|SS2022 (shadowsocks 2022)|xray"
 )
 
 proto_exists() {  # $1=name

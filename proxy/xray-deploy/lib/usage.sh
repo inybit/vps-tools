@@ -19,7 +19,9 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
   sudo xray-deploy upgrade         升级 Xray 二进制（失败自动回滚）
   sudo xray-deploy status|restart|uninstall
-  sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / hysteria2）
+  sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / hysteria2 / ss2022）
+  xray-deploy chain show|setup|import|export|test|remove
+                                   中转 + 落地（链式代理）管理
   xray-deploy -v, --version        显示版本号
   xray-deploy -h, --help           显示本帮助
 
@@ -36,6 +38,33 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
                  （旧名 vless-h2 兼容，1.3.0 起统一为 vless-xhttp）
   hysteria2      Hysteria2 (hy2)（QUIC/UDP，官方默认端口 443 模拟 HTTP/3；自签证书+客户端 insecure，无需 CF token）
                  TCP/UDP 端口独立：与 REALITY 的 TCP 443 可共存；UDP 端口被占时向导会提示是否卸载冲突协议
+  ss2022         SS2022 (shadowsocks 2022)（TCP+UDP，2022-blake3-aes-256-gcm 等）
+                 ⚠️ 定位=【中转机 → 落地机】一跳（境外↔境外）。**不要用于出境段**
+                    （SS2022 无 TLS 外观，主动探测特征明显，跨境会被风控；出境请用 REALITY）
+                 用于 xray-deploy chain 链路；密钥 32 字节 base64（openssl rand -base64 32）
+
+中转 + 落地（链式代理）:
+  架构:  客户端 ──[REALITY]──→ 中转机 ──[SS2022]──→ 落地机 ──→ 目标
+  落地机: sudo xray-deploy protocol add（选 ss2022）→ xray-deploy chain export
+  中转机: xray-deploy chain import   （粘贴落地机 export 的 JSON）
+          xray-deploy chain setup    （或手工输入落地参数）
+          xray-deploy chain show     （查看拓扑与出口路径）
+          xray-deploy chain test     （配置层自检，不发起跨境连接）
+          xray-deploy chain remove   （拆链路回单机）
+  客户端: 零改动 —— 仍使用中转机的 REALITY 参数
+
+分流模式（哪些流量走落地机；安全底线 block 规则不受影响）:
+  sudo xray-deploy chain mode list              查看全部模式
+  sudo xray-deploy chain mode all               全部走落地（默认）
+  sudo xray-deploy chain mode ai                AI 类走落地（category-ai-!cn + openai）
+  sudo xray-deploy chain mode google            Google 走落地
+  sudo xray-deploy chain mode youtube           YouTube 走落地
+  sudo xray-deploy chain mode ai-google-youtube AI + Google + YouTube 走落地
+  sudo xray-deploy chain mode none              全部直出（不用落地）
+  sudo xray-deploy chain mode custom:geosite:netflix,geosite:spotify
+  xray-deploy chain mode                        查看当前模式
+  ⚠️ 底线 block 永远保留：广告 / BT / 私网 / 国内站点（cn）
+  ⚠️ 新增 geosite 标签前须 curl 验证存在（MetaCubeX geo/geosite/<tag>.yaml）
 
 客户端兼容性:
   mihomo 连 Xray >= 26.9.8 的 REALITY 必须显式 support-x25519mlkem768: true

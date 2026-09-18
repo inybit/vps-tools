@@ -35,6 +35,12 @@ cmd_info() {
       [[ -n "$domain" ]] && echo "SNI: ${domain}"
       echo "证书: ${cert_file}"
       [[ -n "$brutal_up" && -n "$brutal_down" ]] && echo "BRUTAL: up=${brutal_up} down=${brutal_down}"
+    elif [[ "$type" == "ss2022" ]]; then
+      echo "传输: TCP+UDP (shadowsocks 2022)"
+      echo "方法: $(jq -r ".protocols[$i].method" "$STATE_FILE")"
+      echo "密钥: ${password}"
+      echo "⚠️ 本协议定位=【中转机→落地机】一跳（境外↔境外）；"
+      echo "   出境段（客户端↔中转）请用 REALITY（SS2022 无 TLS 外观，跨境会被风控）"
     else
       echo "UUID: ${uuid}"
     fi
@@ -51,6 +57,8 @@ cmd_info() {
     echo "--- mihomo (Clash Meta) proxies 片段 ---"
     if [[ "$type" == "hysteria2" ]]; then
       gen_client_mihomo_hysteria2 "$name" "$ip" "$port" "$password" "$domain" "$brutal_up" "$brutal_down"
+    elif [[ "$type" == "ss2022" ]]; then
+      gen_client_mihomo_ss2022 "$name" "$ip" "$port" "$(jq -r ".protocols[$i].method" "$STATE_FILE")" "$password"
     else
       gen_client_mihomo "$type" "$name" "$ip" "$port" "$uuid" "$pub" "$sni" "$sid" "$domain" "$path"
     fi
@@ -58,6 +66,8 @@ cmd_info() {
     echo "--- sing-box outbounds 片段 ---"
     if [[ "$type" == "hysteria2" ]]; then
       gen_client_singbox_hysteria2 "$name" "$ip" "$port" "$password" "$domain" "$brutal_up" "$brutal_down"
+    elif [[ "$type" == "ss2022" ]]; then
+      gen_client_singbox_ss2022 "$name" "$ip" "$port" "$(jq -r ".protocols[$i].method" "$STATE_FILE")" "$password"
     else
       gen_client_singbox "$type" "$name" "$ip" "$port" "$uuid" "$pub" "$sni" "$sid" "$domain" "$path"
     fi
@@ -68,9 +78,23 @@ cmd_info() {
   echo "  block: geosite:category-ads-all"
   echo "  block: bittorrent"
   echo "  block: geoip:private"
-  echo "  direct: geosite:google"
   echo "  block: geosite:cn"
   echo "  block: geoip:cn"
+  # 链路提示：配了 chain 则按分流模式追加落地/直出规则
+  if jq -e '.chain.upstream' "$STATE_FILE" >/dev/null 2>&1; then
+    local _m _d
+    _m="$(routing_current_mode)"
+    _d="$(routing_preset_domains "$_m" 2>/dev/null || echo '?')"
+    if [[ "$_d" == "*" ]]; then
+      echo "  landing: tcp,udp（catch-all，全部走落地）"
+    elif [[ -z "${_d// /}" ]]; then
+      echo "  direct: tcp,udp（catch-all，当前 mode=none 全部直出）"
+    else
+      echo "  landing: $(tr ' ' ',' <<<"$_d")（白名单走落地）"
+      echo "  direct: tcp,udp（catch-all，其余直出）"
+    fi
+    echo "  分流模式: ${_m}（切换: xray-deploy chain mode <模式>）"
+  fi
   # 版本兼容警告：mihomo 连 Xray >= 26.9.8 的 REALITY 必须显式开 X25519MLKEM768
   if jq -e '.protocols[] | select(.type=="vless-reality" or .type=="vless-xhttp-reality")' "$STATE_FILE" >/dev/null 2>&1; then
     echo "----------------------------------------------"

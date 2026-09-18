@@ -109,6 +109,7 @@ gen_client_singbox() {  # $1=type 其余参数透传
     vless-xhttp-reality) gen_client_singbox_vless_xhttp_reality "$@" ;;
     vless-xhttp|vless-h2) gen_client_singbox_vless_xhttp "$@" ;;
     hysteria2) gen_client_singbox_hysteria2 "$@" ;;
+    ss2022) gen_client_singbox_ss2022 "$@" ;;
     *) die "未实现的客户端生成: ${type}" ;;
   esac
 }
