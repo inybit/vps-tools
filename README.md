@@ -127,6 +127,7 @@ vps-tools/
 
 ```bash
 bash tests/verify-docker-install.sh       # docker-install 回归（mock 环境，无需 root/真机）
+bash tests/verify-install-selfupdate.sh   # install.sh 自更新回归（23 断言，mock curl，离线可跑）
 bash tests/verify-vps-backup.sh           # vps-backup 回归（139 断言，mock 环境，无需 root/网络）
 bash tests/verify-vps-backup-e2e.sh       # vps-backup 真机 E2E（48 断言，需真实 restic+rclone，
                                           #   local backend 模拟 GDrive，全程零出境）
@@ -317,6 +318,22 @@ nginx-install status                    # 体检（只读，无需 root）
 **站点配置不在本工具范围**：安装后手工写 `/etc/nginx/conf.d/<站点>.conf`。
 生产姿势与 docker-install 联动 —— 容器 `-p 127.0.0.1:8080:80` 只绑本机 + `docker-install firewall lockdown`，
 对外统一由 nginx 反代只开 443（`nginx-install status` 会检查是否有容器端口绑在 `0.0.0.0`）。
+### 更新 vps-tools 自身
+
+```bash
+curl -sSL https://raw.githubusercontent.com/inybit/vps-tools/main/install.sh | sudo bash   # 推荐
+sudo vps-tools self-update        # 或：管理菜单选 5
+```
+
+⚠️ **若你装的是 v1.7.0 或更早**，菜单选 5 / `self-update` 是坏的（见下），请用管道方式。
+
+**已修 bug（v1.7.1）**：从已装副本 `/usr/local/bin/vps-tools` 运行时，`$VPS_TOOLS_VERSION`
+与 `installed_self_version()` 读的是**同一个文件** → 版本恒等 → 恒报「已是最新」，
+**永远不下载远端新版**（用户反馈「菜单选 5 无法更新自身」的根因）。
+修复：比对基准改用 `remote_version()`（远端 install.sh 版本），并补三道防线——
+临时文件落盘（防半截覆盖）、下载内容合法性校验（防错误页覆盖可用命令）、
+防降级（本机高于远端不覆盖）+ 写后复核。回归见 `tests/verify-install-selfupdate.sh`。
+
 ### vps-backup — restic + rclone(Google Drive) 备份与灾难恢复
 
 每台 VPS 独立 repo（`rclone:gdrive:vps-backup/<hostname>`），客户端加密 + 全局去重，

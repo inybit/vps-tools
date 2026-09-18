@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.7.0"
+VPS_TOOLS_VERSION="1.7.1"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -87,11 +87,15 @@ ver_gt() {  # $1 > $2 返回 0
 # 启动检查更新：比对远端 install.sh 版本号，有新版返回 0 并提示；离线/同版本返回 1（静默）
 check_update() {
   local remote
-  remote="$(curl -fsSL --max-time 8 "${BASE_URL}/install.sh" 2>/dev/null | grep -m1 '^VPS_TOOLS_VERSION=' | cut -d= -f2 | tr -d '"' | tr -d ' ')"
+  remote="$(remote_version)"
   [[ -n "$remote" ]] || return 1
   if ver_gt "$remote" "$VPS_TOOLS_VERSION"; then
     log_warn "检测到新版本 vps-tools ${remote}（当前 ${VPS_TOOLS_VERSION}）"
-    log_warn "更新方式: vps-tools 菜单选 5，或运行: curl -sSL ${BASE_URL}/install.sh | sudo bash"
+    # ⚠️ 提示顺序很重要：**先给管道方式**。旧副本（< 1.7.1）的「菜单选 5」自身有 bug
+    #    （拿副本自己跟自己比版本 → 恒报已最新，永远拉不到新版），
+    #    所以对尚未修复的机器，选 5 是无效指引。
+    log_warn "更新方式: curl -sSL ${BASE_URL}/install.sh | sudo bash"
+    log_warn "  （已装 v1.7.1+ 的机器也可用「菜单选 5 / vps-tools self-update」）"
     return 0
   fi
   return 1
@@ -261,31 +265,83 @@ read_input() {  # $1=提示 $2=变量名；返回 1 = 无交互终端
 #    而其中的交互判据修复（has_ctty）永远到不了用户机器上（2026-09-18 真机实测：
 #    旧副本在无 TTY 下报 "line 238: /dev/tty: No such device or address"）。
 #    故「版本不一致」同样刷新（同版本不重写，避免每次无谓下载）。
-installed_self_version() {  # stdout=已装管理命令的版本号（读不到则空）
-  [[ -r "${VPS_TOOLS_CMD}" ]] || return 0
-  sed -n 's/^VPS_TOOLS_VERSION="\([^"]*\)".*/\1/p' "${VPS_TOOLS_CMD}" 2>/dev/null | head -1
+# 已装管理命令的版本号（读不到则空）
+installed_self_version() {  # $1=文件（默认 ${VPS_TOOLS_CMD}）
+  local f="${1:-${VPS_TOOLS_CMD}}"
+  [[ -r "$f" ]] || return 0
+  sed -n 's/^VPS_TOOLS_VERSION="\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -1
 }
 
+# 远端 install.sh 的版本号（读不到则空 = 离线/被墙）
+remote_version() {
+  curl -fsSL --max-time 10 "${BASE_URL}/install.sh" 2>/dev/null \
+    | grep -m1 '^VPS_TOOLS_VERSION=' | cut -d= -f2 | tr -d '"' | tr -d ' '
+}
+
+# 本脚本自身的版本（install.sh 直跑时 = 本机要装的版本；副本运行时 = 副本版本）
+self_running_version() { installed_self_version "${BASH_SOURCE[0]}"; }
+
+# 安装/更新 vps-tools 管理命令（自身）
+#
+# ⚠️⚠️ 版本比对必须用【远端版本】做基准，不能用「本脚本的版本常量」——
+#   从已装副本 /usr/local/bin/vps-tools 运行时，$VPS_TOOLS_VERSION 与
+#   installed_self_version() 读的是同一个文件 → 恒等 → 报「已是最新」，
+#   **永远不会下载远端新版**（用户反馈「菜单选 5 无法更新自身」的真根因，
+#   复现见 repro-selfupdate.sh：副本 1.3.0 恒报已最新，远端 1.7.0 拉不下来）。
 install_self() {
   [[ $EUID -eq 0 ]] || return 1
-  local cur
+  local cur remote running
   cur="$(installed_self_version)"
-  if [[ "$cur" == "$VPS_TOOLS_VERSION" ]]; then
+  running="$(self_running_version)"
+  remote="$(remote_version)"
+
+  # 远端版本不可得（离线/被墙）→ 无法判断，不盲目下载；由调用方决定是否继续
+  if [[ -z "$remote" ]]; then
+    log_warn "无法获取远端版本（离线或网络受限），跳过管理命令更新检查"
+    return 2
+  fi
+
+  # 已装副本 == 远端最新 → 无需动作
+  if [[ -n "$cur" && "$cur" == "$remote" ]]; then
     log_info "管理命令已是最新（v${cur}）: ${VPS_TOOLS_CMD}"
     return 0
   fi
-  mkdir -p "$(dirname "${VPS_TOOLS_CMD}")"   # curl 写文件前先建目录（防 curl 23）
-  if curl -fsSL --max-time 60 "${BASE_URL}/install.sh" -o "${VPS_TOOLS_CMD}"; then
-    chmod +x "${VPS_TOOLS_CMD}"
-    if [[ -n "$cur" ]]; then
-      log_info "已更新管理命令: ${VPS_TOOLS_CMD}（v${cur} → v${VPS_TOOLS_VERSION}）"
-    else
-      log_info "已安装管理命令: ${VPS_TOOLS_CMD}（直接运行 vps-tools 进入管理）"
-    fi
+
+  # 本机正在运行的 install.sh 比远端还新 → 不用远端覆盖自己（防降级）
+  if ver_gt "$running" "$remote"; then
+    log_warn "本机版本 v${running} 高于远端 v${remote}，不覆盖（跳过）"
     return 0
   fi
-  log_warn "安装 ${VPS_TOOLS_CMD} 失败（不影响工具安装）"
-  return 1
+
+  mkdir -p "$(dirname "${VPS_TOOLS_CMD}")"   # curl 写文件前先建目录（防 curl 23）
+  local tmp="${VPS_TOOLS_CMD}.tmp.$$"
+  if ! curl -fsSL --max-time 60 "${BASE_URL}/install.sh" -o "$tmp"; then
+    rm -f "$tmp"
+    log_warn "下载失败，管理命令保持原样: ${VPS_TOOLS_CMD}"
+    return 1
+  fi
+  # 落盘前校验：下载内容必须是合法的 install.sh（防半截文件/错误页面覆盖可用命令）
+  local got
+  got="$(installed_self_version "$tmp")"
+  if [[ -z "$got" ]]; then
+    rm -f "$tmp"
+    log_err "下载内容不是有效的 install.sh（无版本号），拒绝覆盖 ${VPS_TOOLS_CMD}"
+    return 1
+  fi
+  chmod +x "$tmp"
+  mv -f "$tmp" "${VPS_TOOLS_CMD}"
+  if [[ -n "$cur" ]]; then
+    log_info "已更新管理命令: ${VPS_TOOLS_CMD}（v${cur} → v${got}）"
+  else
+    log_info "已安装管理命令: ${VPS_TOOLS_CMD}（v${got}，直接运行 vps-tools 进入管理）"
+  fi
+  # 写后复核（不信自报）
+  local after; after="$(installed_self_version)"
+  if [[ "$after" != "$got" ]]; then
+    log_err "更新后复核失败：磁盘版本为 ${after:-空}（期望 ${got}）"
+    return 1
+  fi
+  return 0
 }
 
 # ============ 交互式工具选择 ============
@@ -350,7 +406,12 @@ interactive_menu() {
       2) pick_tools_menu update ;;
       3) pick_tools_menu uninstall ;;
       4) list_tools ;;
-      5) install_self ;;
+      5)
+        if ! install_self; then
+          log_warn "自更新未完成，可用管道方式强制刷新:"
+          log_warn "  curl -sSL ${BASE_URL}/install.sh | sudo bash"
+        fi
+        ;;
       0) break ;;
       *) log_warn "无效选择" ;;
     esac
