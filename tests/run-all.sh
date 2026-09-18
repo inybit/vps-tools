@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# ============================================================
+# vps-tools 全量回归入口（canonical test runner）
+#
+# 用法:  bash tests/run-all.sh            # 全量
+#        bash tests/run-all.sh backup     # 只跑匹配 "backup" 的套件
+# 退出码: 0 = 全部通过；1 = 有套件失败
+#
+# 为什么需要它：各 verify-*.sh 分散，改动后容易漏跑；
+# 且「哪些失败是本轮引入的」需要改动前后的对照基线。
+# ============================================================
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO" || exit 1
+FILTER="${1:-}"
+
+# 真机 E2E 需要真实 restic/rclone；缺失时该套件自行 SKIP（exit 0）
+RESTIC_BIN="${RESTIC_BIN:-$(command -v restic 2>/dev/null || true)}"
+RCLONE_BIN="${RCLONE_BIN:-$(command -v rclone 2>/dev/null || true)}"
+[[ -n "$RESTIC_BIN" ]] && export RESTIC_BIN
+[[ -n "$RCLONE_BIN" ]] && export RCLONE_BIN
+
+# 已知既存失败（与本轮改动无关，勿当成回归）：
+#   verify-nginx-install.sh      — install_self 陈旧副本刷新
+#   verify-xray-deploy-all.sh    — 端到端分流切换
+#   verify-xray-deploy-split.sh  — 新增函数白名单
+KNOWN_FAIL='verify-nginx-install.sh verify-xray-deploy-all.sh verify-xray-deploy-split.sh'
+
+npass=0; nfail=0; failed=""
+for t in tests/verify-*.sh; do
+  [[ -f "$t" ]] || continue
+  name="$(basename "$t")"
+  [[ -n "$FILTER" && "$name" != *"$FILTER"* ]] && continue
+  printf '%-42s ' "$name"
+  if bash "$t" > "/tmp/run-all.$$.out" 2>&1; then
+    printf 'PASS  %s\n' "$(grep -oE 'PASS=[0-9]+ FAIL=[0-9]+' "/tmp/run-all.$$.out" | tail -1)"
+    npass=$((npass+1))
+  else
+    if [[ " $KNOWN_FAIL " == *" $name "* ]]; then
+      printf 'KNOWN-FAIL（既存，非本轮）\n'
+    else
+      printf 'FAIL  ← 回归！%s\n' "$(grep -E '\[FAIL\]' "/tmp/run-all.$$.out" | head -1)"
+    fi
+    nfail=$((nfail+1)); failed="$failed $name"
+  fi
+done
+rm -f "/tmp/run-all.$$.out"
+
+echo "------------------------------------------------"
+echo "套件: 通过 $npass / 失败 $nfail"
+[[ -n "$failed" ]] && echo "失败:$failed"
+exit $(( nfail > 0 ? 1 : 0 ))

@@ -63,7 +63,12 @@ load_env() {
   : "${VP_TG_CHAT_ID:=}"
   : "${VP_YES:=0}"
   : "${VP_RCLONE_CONFIG:=}"                          # 非空则导出 RCLONE_CONFIG
-  [[ -n "${VP_RCLONE_CONFIG}" ]] && export RCLONE_CONFIG
+  # ⚠️ 必须写成 export RCLONE_CONFIG="$VP_RCLONE_CONFIG"。
+  #    写成裸 `export RCLONE_CONFIG` 只会把**已存在的** RCLONE_CONFIG 标为导出
+  #    （值不变，通常为空）→ restic 拉起的 rclone 子进程读不到自定义配置而静默退回
+  #    默认 ~/.config/rclone/rclone.conf。症状：非默认配置路径下 init/snapshots 看似正常，
+  #    实际 repo 落在默认 remote 或 rclone 的 cwd（2026-09-19 真机 E2E 实测）。
+  [[ -n "${VP_RCLONE_CONFIG}" ]] && export RCLONE_CONFIG="${VP_RCLONE_CONFIG}"
   # GDrive 每日上传限额（750GiB，未公开）命中时让 rclone 致命退出而非静默截断
   # （放在 load_env 而非 backup 内部：restic 拉起的 rclone 子进程继承本变量）
   export RCLONE_DRIVE_STOP_ON_UPLOAD_LIMIT="${RCLONE_DRIVE_STOP_ON_UPLOAD_LIMIT:-true}"

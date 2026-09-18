@@ -500,6 +500,33 @@ chk "无硬编码密钥（脱敏铁律）" \
     "! grep -rInE '(token|password|secret|api[_-]?key)[[:space:]]*[=:][[:space:]]*[\"'\'']?[A-Za-z0-9_:-]{16,}' ${TOOL_DIR} --include='*.sh' --include='*.example' | grep -vE 'VP_TG_BOT_TOKEN=\"\\\$|PLACEHOLDER|sha256|VP_|RCLONE_|RESTIC_' | grep -q ."
 
 echo ""
+echo "=== [O] rclone 配置导出契约（2026-09-19 真机 E2E 修复回归） ==="
+# 背景：load_env 曾写作裸 `export RCLONE_CONFIG`，它只把**已存在的** RCLONE_CONFIG
+# 标为导出（值不变，通常为空），VM 文件里的 VP_RCLONE_CONFIG 从未真正生效。
+# 症状：restic 拉起的 rclone 子进程读不到自定义配置，静默退回 ~/.config/rclone/rclone.conf
+# → repo 落到默认 remote 甚至进程 cwd（本次 E2E 实测 repo 跑进 cwd）。
+# 契约：env 文件的 VP_RCLONE_CONFIG 必须变成子进程可见的 RCLONE_CONFIG。
+CFGPROBE="$TMP/probe.conf"
+cat > "$TMP/probe.env" <<EOF
+VP_RCLONE_CONFIG="$CFGPROBE"
+VP_RCLONE_REMOTE="gdrive"
+VP_REPO_BASE="vps-backup"
+VP_HOST="testhost"
+EOF
+chmod 600 "$TMP/probe.env"
+# 干净子进程：不预设 RCLONE_CONFIG，专测工具自己有没有导出
+# shellcheck disable=SC2034  # SEEN 仅用于紧随其后的 eval 断言
+SEEN="$(env -u RCLONE_CONFIG -u VP_RCLONE_CONFIG VP_ENV_FILE="$TMP/probe.env" \
+        bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; load_env >/dev/null 2>&1; printf '%s' \"\${RCLONE_CONFIG:-}\"" 2>/dev/null)"
+chk "VP_RCLONE_CONFIG 被导出为 RCLONE_CONFIG（裸 export 会丢值）" \
+    "[[ \"\$SEEN\" == '$CFGPROBE' ]]"
+# 反向断言：未配置时不得凭空造一个 RCLONE_CONFIG（避免污染默认路径语义）
+# shellcheck disable=SC2034  # SEEN2 仅用于紧随其后的 eval 断言
+SEEN2="$(env -u RCLONE_CONFIG -u VP_RCLONE_CONFIG VP_ENV_FILE="$TMP/vps-backup.env" \
+        bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; load_env >/dev/null 2>&1; printf '%s' \"\${RCLONE_CONFIG:-}\"" 2>/dev/null)"
+chk "未设 VP_RCLONE_CONFIG 时不注入 RCLONE_CONFIG（不越权）" "[[ -z \"\$SEEN2\" ]]"
+
+echo ""
 echo "================================================"
 echo "PASS=$PASS FAIL=$FAIL"
 echo "================================================"
