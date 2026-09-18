@@ -22,22 +22,13 @@ ssh_main() {
   fi
 
   # ---------- 1. 公钥获取与注入 ----------
+  # 复用 lib/sshkey.sh 的 read_pubkey/valid_pubkey/inject_pubkey
+  # （user 步骤也用同一套 → 两处行为不漂移；2026-09-19 抽取）
   local pubkey=""
-  if [[ -n "${VPS_INIT_SSH_PUBKEY:-}" ]]; then
-    pubkey="${VPS_INIT_SSH_PUBKEY}"
-    # env 值可能是文件路径
-    if [[ -f "$pubkey" ]]; then
-      pubkey="$(tr -d '\r\n' < "$pubkey")"
-    fi
-  elif [[ -n "$1" && -f "$1" ]]; then
-    pubkey="$(tr -d '\r\n' < "$1")"
-  else
-    read_input "粘贴 SSH 公钥（ssh-ed25519 AAAA... 或 ssh-rsa AAAA...；也可传 --pubkey <文件>，已有配置可回车跳过）: " pubkey || pubkey=""
-  fi
+  pubkey="$(read_pubkey "${1:-}")" || pubkey=""
 
   # 无公钥时的幂等回退：已有 authorized_keys 视为已配置，跳过注入
-  local user homedir sshdir authorized
-  local has_existing_keys=0
+  local user homedir has_existing_keys=0
   for user in "${target_users[@]}"; do
     homedir="$(getent passwd "$user" | cut -d: -f6)"
     [[ -s "${homedir}/.ssh/authorized_keys" ]] && has_existing_keys=1
@@ -50,26 +41,13 @@ ssh_main() {
     fi
     log_info "authorized_keys 已存在，跳过公钥注入（如需更换请手动更新）"
   else
-    # 校验：以 ssh- 开头（允许注释后缀）
-    if ! [[ "$pubkey" =~ ^ssh-(ed25519|rsa|ecdsa|dss)[[:space:]]+ ]]; then
+    if ! valid_pubkey "$pubkey"; then
       log_err "公钥格式不合法（应以 ssh-ed25519 / ssh-rsa 等开头）"
       return 1
     fi
     for user in "${target_users[@]}"; do
-      homedir="$(getent passwd "$user" | cut -d: -f6)"
-      sshdir="${homedir}/.ssh"
-      authorized="${sshdir}/authorized_keys"
-      mkdir -p "$sshdir"
-      chmod 700 "$sshdir"
-      touch "$authorized"
-      chmod 600 "$authorized"
-      if grep -qF "$pubkey" "$authorized" 2>/dev/null; then
-        log_info "${user}: 公钥已存在，跳过"
-      else
-        echo "$pubkey" >> "$authorized"
-        log_info "${user}: 公钥已注入 ${authorized}"
-      fi
-      chown -R "$user":"$(id -gn "$user")" "$sshdir" 2>/dev/null || true
+      # inject_pubkey 内部做权限/属主/内容三重实测复核
+      inject_pubkey "$user" "$pubkey" || return 1
     done
   fi
 

@@ -117,7 +117,7 @@ vps-tools/
 |---|---|---|---|
 | [vnstat-monitor](monitor/vnstat-monitor/) | monitor | vnStat + Telegram 流量监控：进度条/偏移校准/熔断关机/无限流量模式；原地更新消息防刷屏（2026-08-08 修复孤儿卡片：错误分类+原子写状态） | vnstat, jq, curl, gawk, iproute2 |
 | [xray-deploy](proxy/xray-deploy/) | proxy | Xray 一键部署：交互菜单/子命令双模式；协议注册表可扩展（VLESS-TCP-XTLS-Vision-REALITY 默认 / VLESS-XHTTP-REALITY 含 XMUX / VLESS-XHTTP-H2-TLS / Hysteria2 hy2）；回落域名半自动筛选（VPS 侧握手 + Globalping 中国方向可达性双检）；MetaCubeX geosite/geoip 每周自动更新；生成 mihomo/sing-box 客户端节点；服务端 routing 防国内访问 | curl, unzip, jq, openssl |
-| [vps-init](utils/vps-init/) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 普通用户+sudo / SSH 密钥+随机高位端口+禁密码 / Fail2Ban / UFW；模块化 lib/ + 模板渲染 | curl, openssh-server |
+| [vps-init](utils/vps-init/) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 普通用户+sudo+**SSH 公钥注入** / SSH 密钥+随机高位端口+禁密码 / Fail2Ban / UFW；模块化 lib/ + 模板渲染 | curl, openssh-server |
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl |
 | [docker-install](utils/docker-install/) | utils | Docker 安装（官方源）+ **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker) 接管 DOCKER-USER，固定版本 + sha256 校验）+ 非暴露模式（容器端口仅本机可达）+ 非 root 管理 + 权限体检 | curl, iptables, ufw |
 | [nginx-install](web/nginx-install/) | web | nginx 官方源安装（stable/mainline 可选）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 公钥摘要）+ apt Pin-Priority 900 + 体检（官方源/服务/配置语法/监听端口/Docker 联动） | curl, gnupg/openssl, apt/dnf/apk |
@@ -128,6 +128,7 @@ vps-tools/
 ```bash
 bash tests/verify-docker-install.sh       # docker-install 回归（mock 环境，无需 root/真机）
 bash tests/verify-install-selfupdate.sh   # install.sh 自更新回归（23 断言，mock curl，离线可跑）
+bash tests/verify-vps-init-user-sshkey.sh # vps-init 建用户+注入公钥回归（34 断言，mock，离线可跑）
 bash tests/verify-vps-backup.sh           # vps-backup 回归（139 断言，mock 环境，无需 root/网络）
 bash tests/verify-vps-backup-e2e.sh       # vps-backup 真机 E2E（48 断言，需真实 restic+rclone，
                                           #   local backend 模拟 GDrive，全程零出境）
@@ -239,7 +240,7 @@ vps-init status             # 查看已执行步骤 / SSH 端口 / 时区 / BBR 
 
 ```bash
 sudo vps-init system        # 时区 Asia/Shanghai + BBR
-sudo vps-init user          # 创建普通用户 + sudo（VPS_INIT_SKIP_USER=1 跳过 = root-only）
+sudo vps-init user          # 创建普通用户 + sudo + 注入 SSH 公钥（VPS_INIT_SKIP_USER=1 跳过 = root-only）
 sudo vps-init ssh           # SSH 密钥注入 + 随机高位端口 + 禁用密码登录
 sudo vps-init ufw           # UFW：deny incoming，放行 SSH 端口 + 额外端口
 sudo vps-init fail2ban      # Fail2Ban：backend/banaction 自动探测，端口注入

@@ -60,6 +60,24 @@ user_main() {
   echo "${username}:${pass}" | chpasswd
   log_info "已加入 ${sgroup} 组并设置密码（sudo 提权需要）"
 
+  # ---------- 注入 SSH 公钥（用户建好即给钥匙，不必等到 ssh 步骤） ----------
+  # 动机：user 步骤先跑完、ssh 步骤被跳过/中断时，用户已存在却没有 authorized_keys
+  # → 只能靠密码登录，与「密钥优先」的安全目标相悖。
+  local pubkey=""
+  pubkey="$(read_pubkey "${VPS_INIT_PUBKEY_FILE:-}")" || pubkey=""
+  if [[ -n "$pubkey" ]]; then
+    if ! valid_pubkey "$pubkey"; then
+      log_err "公钥格式不合法（应以 ssh-ed25519 / ssh-rsa 等开头）—— 用户已创建但未注入公钥"
+      log_err "  稍后补: vps-init ssh   （或修正 VPS_INIT_SSH_PUBKEY 后重跑 vps-init user）"
+    else
+      # 复核失败不回滚用户（用户已可用），但明确报错让调用方知道未就绪
+      inject_pubkey "$username" "$pubkey" || log_err "公钥注入 ${username} 失败（用户已创建，可稍后用 vps-init ssh 补）"
+    fi
+  else
+    log_warn "未提供 SSH 公钥 —— ${username} 暂时只能用密码登录"
+    log_warn "  建议现在补上: vps-init ssh（含密钥注入 + 禁用密码登录）"
+  fi
+
   # ---------- 可选：禁用 root 登录 ----------
   if [[ "${VPS_INIT_DISABLE_ROOT:-0}" == "1" ]]; then
     ssh_set_permit_root_login no

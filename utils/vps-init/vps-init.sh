@@ -6,7 +6,7 @@
 #   vps-init                交互向导：按序执行 system → user → ssh → ufw → fail2ban（每步确认）
 #   vps-init dd             一键 DD 重装（全自动续跑：cloud-init 首启自动初始化）
 #   vps-init system         单步：时区 + BBR
-#   vps-init user           单步：创建普通用户 + sudo
+#   vps-init user           单步：创建普通用户 + sudo + 注入 SSH 公钥
 #   vps-init ssh            单步：SSH 密钥/随机高位端口/禁密码
 #   vps-init ufw            单步：UFW 防火墙
 #   vps-init fail2ban       单步：Fail2Ban
@@ -16,13 +16,15 @@
 # 配置: /etc/vps-init.env（可缺省；向导交互输入，非交互/预填用环境变量）
 # 状态: /etc/vps-init/done.<step>（幂等：已完成的步骤跳过）
 
-VPS_INIT_VERSION="1.0.1"
+VPS_INIT_VERSION="1.1.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/system.sh
 . "${SCRIPT_DIR}/lib/system.sh"
+# shellcheck source=lib/sshkey.sh
+. "${SCRIPT_DIR}/lib/sshkey.sh"
 # shellcheck source=lib/user.sh
 . "${SCRIPT_DIR}/lib/user.sh"
 # shellcheck source=lib/ssh.sh
@@ -96,7 +98,7 @@ vps-init ${VPS_INIT_VERSION} — 一键初始化 VPS
   vps-init                    交互向导（system → user → ssh → ufw → fail2ban）
   vps-init dd                 一键 DD 重装（全自动续跑，cloud-init 首启自动初始化）
   vps-init system             单步: 时区 Asia/Shanghai + BBR
-  vps-init user               单步: 创建普通用户 + sudo
+  vps-init user               单步: 创建普通用户 + sudo + 注入 SSH 公钥
   vps-init ssh                单步: SSH 密钥/随机高位端口/禁密码登录
   vps-init ufw                单步: UFW（deny incoming，放行必要端口）
   vps-init fail2ban           单步: Fail2Ban（SSH 防暴力破解）
@@ -109,6 +111,7 @@ DD 子命令参数（可选预填）:
 
 配置（/etc/vps-init.env，可缺省）:
   VPS_INIT_USER / VPS_INIT_USER_PASS / VPS_INIT_SSH_PUBKEY / VPS_INIT_SSH_PORT
+  VPS_INIT_PUBKEY_FILE=<路径>  # 公钥文件（等价于 VPS_INIT_SSH_PUBKEY 传路径）
   SSH_PORT_MIN=20000 / SSH_PORT_MAX=60000 / VPS_INIT_EXTRA_PORTS=80,443
   VPS_INIT_SKIP_USER=0 / VPS_INIT_DISABLE_ROOT=0 / VPS_INIT_YES=0
 
