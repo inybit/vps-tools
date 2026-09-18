@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.6.2"
+VPS_TOOLS_VERSION="1.7.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -64,6 +64,7 @@ TOOLS=(
   "vps-bench|bench/vps-bench/vps-bench.sh|||0|"
   "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env|1|utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh"
   "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env|0|web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh"
+  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env|1|backup/vps-backup/lib/common.sh backup/vps-backup/lib/deps.sh backup/vps-backup/lib/repo.sh backup/vps-backup/lib/backup.sh backup/vps-backup/lib/retention.sh backup/vps-backup/lib/restore.sh backup/vps-backup/lib/timer.sh backup/vps-backup/lib/status.sh backup/vps-backup/lib/usage.sh"
 )
 
 # ============ 辅助函数 ============

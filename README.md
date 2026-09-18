@@ -102,6 +102,10 @@ vps-tools/
 │   └── vps-bench/
 │       └── vps-bench.sh
 └── backup/             # 备份类
+    └── vps-backup/                  # restic + rclone(GDrive) 备份与灾难恢复（2026-09-19）
+        ├── vps-backup.sh            # 入口：向导 + 子命令分发
+        ├── lib/                     # common/deps/repo/backup/retention/restore/timer/status/usage
+        └── templates/vps-backup.env.example
 ```
 
 新增脚本：按功能域放入对应目录 + 在 `install.sh` 的 `TOOLS` 注册表加一行（格式见文件头注释）。
@@ -117,11 +121,15 @@ vps-tools/
 | [vps-bench](bench/vps-bench/) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl |
 | [docker-install](utils/docker-install/) | utils | Docker 安装（官方源）+ **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker) 接管 DOCKER-USER，固定版本 + sha256 校验）+ 非暴露模式（容器端口仅本机可达）+ 非 root 管理 + 权限体检 | curl, iptables, ufw |
 | [nginx-install](web/nginx-install/) | web | nginx 官方源安装（stable/mainline 可选）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 公钥摘要）+ apt Pin-Priority 900 + 体检（官方源/服务/配置语法/监听端口/Docker 联动） | curl, gnupg/openssl, apt/dnf/apk |
+| [vps-backup](backup/vps-backup/) | backup | **restic + rclone(Google Drive) 备份与灾难恢复**：core/data 分层（core 每 6h 秒级恢复 / data 每日后台恢复）；保留策略 forget+prune；每周完整性抽查；**凭证不入包**（防自噬）；connect 与 init 严格分离；Telegram 失败告警；自动生成灾难恢复 runbook | restic, rclone（工具自带 sha256 校验安装）, curl |
 
 ## 测试
 
 ```bash
-bash tests/verify-docker-install.sh    # docker-install 回归（50 断言，mock 环境，无需 root/真机）
+bash tests/verify-docker-install.sh       # docker-install 回归（mock 环境，无需 root/真机）
+bash tests/verify-vps-backup.sh           # vps-backup 回归（119 断言，mock 环境，无需 root/网络）
+bash tests/verify-vps-backup-e2e.sh       # vps-backup 真机 E2E（48 断言，需真实 restic+rclone，
+                                          #   local backend 模拟 GDrive，全程零出境）
 ```
 
 回归脚本用 PATH stub 模拟 ufw/iptables/ip6tables/systemctl/docker 与上游 ufw-docker，
@@ -309,3 +317,55 @@ nginx-install status                    # 体检（只读，无需 root）
 **站点配置不在本工具范围**：安装后手工写 `/etc/nginx/conf.d/<站点>.conf`。
 生产姿势与 docker-install 联动 —— 容器 `-p 127.0.0.1:8080:80` 只绑本机 + `docker-install firewall lockdown`，
 对外统一由 nginx 反代只开 443（`nginx-install status` 会检查是否有容器端口绑在 `0.0.0.0`）。
+### vps-backup — restic + rclone(Google Drive) 备份与灾难恢复
+
+每台 VPS 独立 repo（`rclone:gdrive:vps-backup/<hostname>`），客户端加密 + 全局去重，
+**云端只见密文**；恢复路径专为「快速灾难恢复」设计。
+
+```bash
+curl -sSL https://raw.githubusercontent.com/inybit/vps-tools/main/install.sh | sudo -S -p '' bash -s -- install vps-backup
+sudo -S -p '' vps-backup deps                       # 安装 restic + rclone（官方二进制 + sha256 校验，fail-closed）
+sudo -S -p '' vps-backup                            # 向导：依赖 → repo 连接 → 范围 → 通知 → timer → runbook
+sudo -S -p '' vps-backup init                       # 首次初始化 repo（已存在则拒绝）
+sudo -S -p '' vps-backup backup core                # 立刻备一次 core
+sudo -S -p '' vps-backup snapshots                  # 看快照（只读）
+sudo -S -p '' vps-backup restore latest --tag core --target /tmp/restore
+sudo -S -p '' vps-backup status                     # repo/依赖/remote/快照新鲜度/timer/凭证自检
+sudo -S -p '' vps-backup runbook                    # 生成灾难恢复文档（/root/VPS-RESTORE.md）
+```
+
+**分层备份（快速恢复的核心）**：
+
+| 层 | 内容 | 频率 | 恢复 |
+|---|---|---|---|
+| `core` | `/etc`、`/root`、dotfiles、`/usr/local/lib/vps-tools`、wrapper | 每 6h | 秒~分钟（MB 级） |
+| `data` | `/var/lib/docker/volumes`、`/srv`、`/opt` | 每日 03:30 | 按体量，可后台 |
+
+先恢复 core → 服务立刻能起 → data 后台慢慢恢复。
+
+**四条硬设计**：
+
+1. **凭证不入包（防自噬）** —— `/etc/restic-password`、`/etc/vps-backup.env`、`rclone.conf`
+   一律写进排除表。机器全毁时靠 Bitwarden 里的密码才读得回备份；备份包里**不含打开自己的钥匙**。
+   `vps-backup status` 会做凭证排除自检。
+2. **connect 与 init 严格分离** —— `connect` 只校验连通与密码，恢复场景**绝不执行 init**；
+   `init` 对已存在 repo 直接拒绝。
+3. **恢复必须显式 `--target`** —— 工具不做裸覆盖 `/`；恢复到 `/tmp/restore` 人工核对后再覆盖。
+4. **失败告警单一出口** —— systemd 单元 `OnFailure=vps-backup-failnotify@.service`，
+   脚本自身跑不起来（restic 缺失 / env 缺失 / token 过期）也能告警；成功才发完成通知，不刷双卡。
+
+**repo 锁**：定时任务撞车/异常退出会留下锁，`--retry-lock`（默认 10m）自动等待；
+真被锁住时报错会明确指向 `vps-backup unlock`（不误导去跑 `repair`）。
+⚠️ restic 的 `unlock` **只清陈旧锁**（持锁进程已消失）；若进程仍在，工具会如实报「锁仍在」
+并提示 `unlock --all`（`--remove-all`）——不会假报成功。
+
+**Google Drive 配置要点（不做会静默失效）**：
+
+- rclone 内置 shared client_id **已停用** → 必须自建 OAuth client_id（Desktop app）
+- OAuth app 留在 **Testing** 状态 → 授权 **7 天过期** → 必须 **PUBLISH APP**（个人 <100 用户免审核）
+- 上传限额 **750 GiB/日**（未公开）→ 工具默认设 `RCLONE_DRIVE_STOP_ON_UPLOAD_LIMIT=true`，
+  命中即致命退出而非静默截断，次日增量续跑
+- 回收站会占配额 → 排除表 + `--drive-use-trash=false` 语义（restic 需要真删）
+
+**调度**：systemd timer（`vps-backup-backup@core.timer` / `@data.timer` / `vps-backup-maintain.timer`），
+不用 cron。维护单元每周执行 `forget + prune + check --read-data-subset=5%`。
