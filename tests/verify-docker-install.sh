@@ -337,6 +337,30 @@ DANGLE="$(cat "$TMP/dangle.txt")"
 chk "无悬空自定义函数（如 host_has_ipv6）" "[[ -z '$DANGLE' ]]"
 
 echo ""
+echo "=== [12] 非 root 管理：无 TTY 时的可诊断性（2026-09-19 真机缺陷回归） ==="
+# 缺陷：root 直登 + 无 TTY 跑向导，卡在 [4/5] 一片空白，用户无从判断
+#   「在等输入」还是「挂了」。根因有二，两条都要锁死，防回归。
+
+# ---- 12a) resolve_target_user 无 TTY 时必须给出根因 + 可执行命令 ----
+cat > "$TMP/rt-notty.sh" <<EOF2
+source "$TOOL_DIR/lib/common.sh"
+source "$TOOL_DIR/lib/access.sh"
+DI_EUID=0
+resolve_target_user ""
+EOF2
+NOTTY_OUT="$(bash "$TMP/rt-notty.sh" 2>&1 || true)"
+chk "无 TTY：说明根因"        "grep -q '无交互终端' <<<$(printf '%q' "$NOTTY_OUT")"
+chk "无 TTY：给出 user 子命令" "grep -q 'user <用户名>' <<<$(printf '%q' "$NOTTY_OUT")"
+chk "无 TTY：给出 DI_DOCKER_USER 替代" "grep -q 'DI_DOCKER_USER' <<<$(printf '%q' "$NOTTY_OUT")"
+chk "无 TTY：不再有泛泛文案「未指定用户，跳过」" "! grep -q '未指定用户，跳过' <<<$(printf '%q' "$NOTTY_OUT")"
+bash "$TMP/rt-notty.sh" >/dev/null 2>&1
+chk "无 TTY：返回非零（调用方可判定）" "[[ \$? -ne 0 ]]"
+
+# ---- 12b) 向导调用点不得吞 stderr（吞了 = 上面的诊断全看不见） ----
+chk "向导调用 resolve_target_user 未重定向 stderr" \
+  "! grep -q 'resolve_target_user \"\" 2>/dev/null' '$TOOL'"
+
+echo ""
 echo "================================================"
 echo "PASS=$PASS FAIL=$FAIL"
 echo "================================================"

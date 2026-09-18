@@ -100,11 +100,13 @@ wizard() {
 
   # 4) 非 root 管理
   log_info "[4/5] 非 root 管理（docker 组）"
-  local user; user="$(resolve_target_user "" 2>/dev/null)" || user=""
+  # ⚠️ 不能吞 stderr：resolve_target_user 的诊断（无 TTY / 用户不存在 / 可用命令）
+  # 全在 stderr，吞掉后用户只能看到 "[4/5]" 之后一片空白（2026-09-19 真机踩坑）。
+  local user; user="$(resolve_target_user "")" || user=""
   if [[ -n "$user" ]]; then
     user_main "$user" || log_warn "用户组配置未完成"
   else
-    log_warn "未指定用户，跳过。稍后执行: sudo ${0##*/} user <用户名>"
+    log_warn "未配置 docker 组，稍后执行: sudo ${0##*/} user <用户名>"
   fi
   echo "" >&2
 

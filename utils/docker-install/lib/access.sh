@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# docker-install 模块：非 root 管理 Docker + 文件读写权限
-#
-# 两条需求：
-#   1. 以非 root 身份管理 docker（docker 组）—— 含组≈root 等价告警
-#   2. 确保非 root 身份运行 docker 时有对应文件的读写权限
-#
+# docker-install 模块：非 root 管理 Docker（docker 组）+ 文件读写权限
+# 需求：① 非 root 管理 docker（含组≈root 等价告警）② 非 root 运行 docker 的文件读写权限
 # perms 默认只 check（只读）；fix 必须显式指定路径，不做全盘 chown。
 # ============================================================
 
@@ -18,11 +14,16 @@ resolve_target_user() {
       u="$SUDO_USER"
       log_info "检测到 sudo 调用者: ${u}" >&2
     else
-      read_input "要加入 docker 组的用户名: " u || u=""
+      # 无 SUDO_USER（root 直登）→ 询问。无 TTY 时必须给出可执行命令，
+      # 否则用户只见 "[4/5]" 后一片空白，无从判断在等输入还是挂了（2026-09-19 真机踩坑）。
+      if ! read_input "要加入 docker 组的用户名: " u; then
+        u=""
+        log_warn "无交互终端，跳过 docker 组配置。非交互: ${0##*/} user <用户名>" >&2
+      fi
     fi
   fi
   if [[ -z "$u" ]]; then
-    log_err "未指定用户名" >&2
+    log_err "未指定用户名（用: ${0##*/} user <用户名> 或 DI_DOCKER_USER=<用户名>）" >&2
     return 1
   fi
   if ! id "$u" >/dev/null 2>&1; then
@@ -177,8 +178,7 @@ perms_check() {
   return 1
 }
 
-# ---------- 权限修复（显式路径） ----------
-# $1=路径  $2=目标属主（默认 docker 组第一个成员）
+# ---------- 权限修复（显式路径） $1=路径 $2=目标属主（默认 docker 组第一个成员） ----------
 perms_fix() {
   require_root
   local path="$1"
