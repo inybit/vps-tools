@@ -28,7 +28,13 @@ cmd_info() {
     brutal_down="$(jq -r ".protocols[$i].brutal_down // \"\"" "$STATE_FILE")"
     echo "----------------------------------------------"
     echo "协议: ${name}  (${type})"
-    echo "地址: ${ip}:${port}"
+    # vless-xhttp3-nginx 的「地址」不是 xray 的监听地址（xray 只监听 UDS），
+    # 而是客户端入口 —— 通常是域名（CF SaaS）。打 IP:port 会误导用户拿它当 server 填。
+    if [[ "$type" == "vless-xhttp3-nginx" ]]; then
+      echo "地址: ${domain}:${port}  （客户端填域名；本机 IP ${ip} 仅源站，勿直连）"
+    else
+      echo "地址: ${ip}:${port}"
+    fi
     if [[ "$type" == "hysteria2" ]]; then
       echo "传输: UDP/QUIC (Hysteria2)"
       echo "密码: ${password}"

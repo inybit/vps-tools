@@ -53,8 +53,8 @@ ck "9) proto_edit 支持该类型" \
   "$(grep -c 'vless-xhttp3-nginx' "${TOOL}/lib/proto-edit.sh")" "6"
 ck "10) proto_list_names 显示 socket_path" \
   "$(grep -c 'socket \" + .value.socket_path' "${TOOL}/lib/proto-crud.sh")" "1"
-ck "11a) cmd_info 含该类型分支（显示 + nginx 参考）" \
-  "$(grep -c 'vless-xhttp3-nginx' "${TOOL}/lib/cmd-info.sh")" "2"
+ck "11a) cmd_info 含该类型 3 个分支（地址行 + 显示 + nginx 参考）" \
+  "$(grep -c 'if \[\[ "\$type" == "vless-xhttp3-nginx" \]\]\|elif \[\[ "\$type" == "vless-xhttp3-nginx" \]\]' "${TOOL}/lib/cmd-info.sh")" "3"
 ck "11b) usage 含该协议说明" \
   "$(grep -c '^  vless-xhttp3-nginx$' "${TOOL}/lib/usage.sh")" "1"
 ck "12) UDS 冲突检查已定义" \
@@ -223,6 +223,26 @@ ck "按 D3 决策不生成 XMUX" "$(grep -c 'reuse-settings' <<<"$info")" "0"
 ck "sing-box 段提示不支持 XHTTP" "$(grep -c 'sing-box 上游不支持 XHTTP' <<<"$info")" "1"
 ck "无 REALITY → 不误报 mlkem768 警告" "$(grep -c 'support-x25519mlkem768' <<<"$info")" "0"
 ck "nginx 参考注明只读" "$(grep -c 'nginx 配置参考（只读' <<<"$info")" "1"
+# --- CF SaaS 回归（2026-09-19 真机事故）---
+# 事故：客户端 server 填了本机 IP → 绕过 CF 直连源站，SNI=域名但源站证书是
+#       CF Origin CA *.007233.xyz → x509 校验失败（mihomo CRYPTO_ERROR 0x12a）。
+# fixture 里 IP=203.0.113.7、domain=203.0.113.9.example.com 互不相同，可精确区分。
+ck "mihomo server 填【域名】而非源站 IP" \
+  "$(sed -n '/mihomo (Clash Meta) proxies 片段/,/sing-box outbounds/p' <<<"$info" \
+     | grep -c '^    server: 203.0.113.9.example.com$')" "1"
+ck "mihomo 片段【不】出现源站 IP 作 server" \
+  "$(sed -n '/mihomo (Clash Meta) proxies 片段/,/sing-box outbounds/p' <<<"$info" \
+     | grep -c '^    server: 203.0.113.7$')" "0"
+ck "sing-box server 填【域名】而非源站 IP" \
+  "$(grep -c '"server": "203.0.113.9.example.com"' <<<"$info")" "1"
+ck "sing-box 片段【不】出现源站 IP 作 server" \
+  "$(grep -c '"server": "203.0.113.7"' <<<"$info")" "0"
+ck "info 地址行提示填域名（非 IP:port）" \
+  "$(grep -c '客户端填域名；本机 IP 203.0.113.7 仅源站，勿直连' <<<"$info")" "1"
+ck "nginx 参考含 CF SaaS 证书/SNI 铁律" \
+  "$(grep -c 'CF SaaS（橙云）场景的证书与 SNI 铁律' <<<"$info")" "1"
+ck "nginx 参考点明绕过 CF 直连源站会失败" \
+  "$(grep -c '填 IP 会绕过 CF 直连源站' <<<"$info")" "1"
 echo
 
 echo "==================================="

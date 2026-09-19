@@ -100,10 +100,19 @@ gen_client_mihomo_vless_xhttp3_nginx() {  # $1=name $2=ip $3=port $4=uuid $5=pub
   # 无 REALITY → 不需要 support-x25519mlkem768
   # 不生成 reuse-settings(XMUX)：填了须对齐用户 nginx 上限（默认 128/1000/3600），
   #   留空则取 mihomo 保守默认（16-32 / 600-900 / 1800-3000）
+  #
+  # ⚠️ server 必须填【域名】而不是本机 IP（2026-09-19 真机事故，勿改回 $2）
+  #    本协议定位是「nginx 终结 TLS」，实际部署几乎都配 CF SaaS（回源 origin.xxx）：
+  #      客户端 --QUIC/TLS--> CF 边缘(证书=你的域名) --回源--> nginx(证书=CF Origin CA *.007233.xyz) --> xray
+  #    若 server 填源站 IP，客户端就【绕过 CF 直连源站】，SNI 却是用户域名，
+  #    而源站证书是 CF Origin CA 签的 *.007233.xyz，SAN 不含该域名 → 必然校验失败：
+  #      x509: certificate is valid for *.007233.xyz, 007233.xyz, not it-tools.inybit.com
+  #      （mihomo 表现为 CRYPTO_ERROR 0x12a / tls: failed to verify certificate）
+  #    填域名后由 DNS（CF SaaS 优选）解析到 CF 边缘，证书由 CF 出示、SAN 匹配。
   cat <<EOF
   - name: "xray-${1}"
     type: vless
-    server: ${2}
+    server: ${8}
     port: ${3}
     uuid: ${4}
     network: xhttp

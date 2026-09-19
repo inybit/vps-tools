@@ -84,7 +84,9 @@ proto_wizard_vless_xhttp3_nginx() {  # $1=name → 输出 JSON 参数对象
   ensure_firewall "$port" tcp
   ensure_firewall "$port" udp
 
-  read -r -p "域名（客户端 SNI / nginx server_name，须已解析到本机）: " domain
+  # ⚠️ 提示措辞必须兼容 CF SaaS：域名通常解析到 CF 边缘（非本机），
+  #    由 CF 回源到本机；说「须已解析到本机」会误导用户以为要 A 记录指源站
+  read -r -p "域名（客户端 SNI / nginx server_name；CF SaaS 下解析到 CF 边缘即可，无需指向本机）: " domain
   [[ -n "$domain" ]] || die "域名不能为空（HTTP/3 客户端必须校验 SNI）"
 
   read -r -p "XHTTP path [默认 /xray]: " path
@@ -116,6 +118,15 @@ xhttp3_print_nginx_reference() {  # $1=domain $2=port $3=path $4=socket_path
 --- nginx 配置参考（只读；本工具不写任何 nginx 文件、不 reload nginx）---
 # 前提：nginx >= ${NGINX_MIN_VERSION} 且编译含 --with-http_v3_module
 # 证书请自行签发/配置（下面两行是占位符，必须替换）
+#
+# ⚠️ CF SaaS（橙云）场景的证书与 SNI 铁律 —— 配错必报证书不匹配：
+#   链路：客户端 --QUIC/TLS(SNI=你的域名)--> CF 边缘(证书=你的域名) --回源--> 本机 nginx
+#   ① 本机 nginx 的证书应是 **CF Origin CA 签发**的（覆盖回源 SNI，如 *.007233.xyz），
+#      不是公网证书；CF 回源默认用「源站域名」当 SNI，故该域名必须在证书 SAN 内。
+#   ② 客户端 server 必须填【域名】而非本机 IP —— 填 IP 会绕过 CF 直连源站，
+#      SNI=你的域名 但源站证书是 *.007233.xyz → x509 校验失败
+#      （mihomo: CRYPTO_ERROR 0x12a / certificate is valid for *.007233.xyz, not <你的域名>）。
+#   ③ CF 侧 SSL/TLS 模式须为 Full (strict)，且该域名已配 SaaS 回源（CNAME 到 origin）。
 server {
   listen ${port} ssl;
   listen [::]:${port} ssl;

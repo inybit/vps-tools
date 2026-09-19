@@ -104,12 +104,15 @@ EOF
 
 gen_client_singbox_vless_xhttp3_nginx() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey(忽略) $6=sni(忽略) $7=shortid(忽略) $8=domain $9=path
   # sing-box 上游不支持 XHTTP（含 h3 形态），需 sing-box-extended / lx fork
+  # ⚠️ server 填【域名】而非本机 IP：本协议几乎都配 CF SaaS，填 IP 会绕过 CF
+  #    直连源站，SNI=用户域名但源站证书是 CF Origin CA *.007233.xyz → 校验失败
+  #    （与 mihomo 片段同一根因，2026-09-19 事故）
   cat <<EOF
 # sing-box 上游不支持 XHTTP，请使用 sing-box-extended 或 sing-box-lx：
 {
   "type": "vless",
   "tag": "xray-${1}",
-  "server": "${2}",
+  "server": "${8}",
   "server_port": ${3},
   "uuid": "${4}",
   "tls": {
