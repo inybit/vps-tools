@@ -494,7 +494,8 @@ python3 - "${REPO}/install.sh" > "$SELF_T/fns.sh" <<'PY'
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 out = []
-for fn in ('installed_self_version', 'install_self'):
+for fn in ('installed_self_version', 'remote_version', 'tools_fp_of', 'fetch_remote_install',
+           'self_running_version', 'ver_gt', 'reload_tools_registry', 'install_self'):
     m = re.search(r'^' + fn + r'\(\) \{.*?^\}', src, re.M | re.S)
     # EUID 是 bash 只读变量，替换成可 mock 的名字才能测非 root 分支
     out.append(m.group(0).replace('$EUID', '$FAKE_EUID'))
@@ -502,9 +503,17 @@ print("\n".join(out))
 PY
 cat > "$SELF_T/fake/curl" <<'STUB'
 #!/usr/bin/env bash
+# ⚠️ 必须同时支持两种调用形态，否则测的不是被测逻辑：
+#   -o <file>  ：install_self 下载正文（落盘）
+#   无 -o      ：remote_version() 管道取 stdout（`curl ... | grep VPS_TOOLS_VERSION`）
+#   早期版本只实现了 -o 分支 → remote_version() 拿到空串 → install_self 直接
+#   走「无法获取远端版本」提前返回 → 该断言恒 FAIL（2026-09-19 定位并修复）。
 out=""; while [[ $# -gt 0 ]]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done
-[[ -n "$out" ]] || exit 0
-printf 'VPS_TOOLS_VERSION="9.9.9"\n# fake\n' > "$out"
+if [[ -n "$out" ]]; then
+  printf 'VPS_TOOLS_VERSION="9.9.9"\n# fake\n' > "$out"
+else
+  printf 'VPS_TOOLS_VERSION="9.9.9"\n# fake\n'
+fi
 STUB
 chmod +x "$SELF_T/fake/curl"
 cat > "$SELF_T/run.sh" <<'RUN'

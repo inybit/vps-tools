@@ -24,7 +24,13 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.8.0"
+# ⚠️ 改了 TOOLS 清单（增删 lib/templates 附加文件）**必须同步递增本版本号**：
+#    install_self 依赖版本比对决定是否拉取远端 install.sh；版本没变 →
+#    已装副本报「已是最新」→ 运行中的旧 TOOLS 清单永久陈旧 → 新增文件永远装不上。
+#    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
+#    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
+#    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
+VPS_TOOLS_VERSION="1.9.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -286,8 +292,48 @@ remote_version() {
     | grep -m1 '^VPS_TOOLS_VERSION=' | cut -d= -f2 | tr -d '"' | tr -d ' '
 }
 
+# 文件的 TOOLS 清单指纹（16 位）——用于判断「远端清单是否已变更」
+# 比对指纹而非版本号：版本号可能忘记随清单递增（2026-09-19 事故根因）
+tools_fp_of() {  # $1=文件
+  [[ -r "$1" ]] || return 1
+  sed -n '/^TOOLS=(/,/^)/p' "$1" | tr -d ' \t\n' | sha256sum | cut -c1-16
+}
+
+# 下载远端 install.sh 到临时文件（成功则输出路径）
+fetch_remote_install() {
+  local t
+  t="$(mktemp "${TMPDIR:-/tmp}/vps-tools-remote.XXXXXX")" || return 1
+  if curl -fsSL --max-time 30 "${BASE_URL}/install.sh" -o "$t" 2>/dev/null && [[ -s "$t" ]]; then
+    printf '%s\n' "$t"
+  else
+    rm -f "$t"; return 1
+  fi
+}
+
 # 本脚本自身的版本（install.sh 直跑时 = 本机要装的版本；副本运行时 = 副本版本）
 self_running_version() { installed_self_version "${BASH_SOURCE[0]}"; }
+
+# ============ 自更新后重载 TOOLS 清单（防「进程内数组陈旧」漏装新增文件） ============
+# 背景（2026-09-19 anthony_fr 实测事故，与「版本未升版」是两个独立缺陷）：
+#   bash 数组在**进程启动时**求值。install_self 把新 install.sh 覆盖到 ${VPS_TOOLS_CMD}
+#   并不会让**当前进程**的 TOOLS 重载 → 同进程内接着 install_tool 仍用旧清单 →
+#   本轮新增的 lib 文件永远装不上。症状：lib/ 下旧文件全是新版 mtime，唯独缺新增那个，
+#   而主脚本已 source 它 → 工具启动即崩：
+#     /usr/local/lib/vps-tools/xray-deploy/lib/xhttp3.sh: No such file or directory
+# 解法：自更新成功后，从**刚落盘的新副本**里重新抽取 TOOLS 块并 eval 回内存。
+#   比 re-exec 更稳（不重启进程、不丢用户当前选择、无循环风险），且覆盖所有调用路径
+#   （菜单选 5、install/update 子命令、self-update），无需在每个入口加钩子。
+reload_tools_registry() {
+  local f="${VPS_TOOLS_CMD}" block
+  [[ -r "$f" ]] || return 1
+  block="$(sed -n '/^TOOLS=(/,/^)/p' "$f")"
+  [[ -n "$block" ]] || return 1
+  eval "$block" || return 1          # 内容来自本仓库自身，与 exec 它同等可信
+  local nv
+  nv="$(installed_self_version "$f")"
+  [[ -n "$nv" ]] && VPS_TOOLS_VERSION="$nv"
+  return 0
+}
 
 # 安装/更新 vps-tools 管理命令（自身）
 #
@@ -295,13 +341,14 @@ self_running_version() { installed_self_version "${BASH_SOURCE[0]}"; }
 #   从已装副本 /usr/local/bin/vps-tools 运行时，$VPS_TOOLS_VERSION 与
 #   installed_self_version() 读的是同一个文件 → 恒等 → 报「已是最新」，
 #   **永远不会下载远端新版**（用户反馈「菜单选 5 无法更新自身」的真根因，
-#   复现见 repro-selfupdate.sh：副本 1.3.0 恒报已最新，远端 1.7.0 拉不下来）。
+#   复现见 verify-install-selfupdate.sh：副本 1.3.0 恒报已最新，远端 1.7.0 拉不下来）。
 install_self() {
   [[ $EUID -eq 0 ]] || return 1
-  local cur remote running
+  local cur remote running cur_fp remote_fp
   cur="$(installed_self_version)"
   running="$(self_running_version)"
   remote="$(remote_version)"
+  cur_fp="$(tools_fp_of "${VPS_TOOLS_CMD}" 2>/dev/null || true)"
 
   # 远端版本不可得（离线/被墙）→ 无法判断，不盲目下载；由调用方决定是否继续
   if [[ -z "$remote" ]]; then
@@ -309,10 +356,23 @@ install_self() {
     return 2
   fi
 
-  # 已装副本 == 远端最新 → 无需动作
+  # 「已装副本 == 远端」的判定不能只看版本号：
+  # ⚠️ 2026-09-19 事故——远端改了 TOOLS（新增 lib/xhttp3.sh）但**忘了升版本号**，
+  #    已装副本 v1.8.0 == 远端 v1.8.0 → 旧逻辑报「已是最新」→ 永不下载 →
+  #    运行中的旧清单陈旧 → 新增文件永远装不上，而主脚本已 source 它 → 启动即崩。
+  # 故必须**同时比对 TOOLS 清单指纹**：版本相同但清单变了，照样要拉取。
   if [[ -n "$cur" && "$cur" == "$remote" ]]; then
-    log_info "管理命令已是最新（v${cur}）: ${VPS_TOOLS_CMD}"
-    return 0
+    # ⚠️ 不能用 `fetch_remote_install | xargs tools_fp_of`：xargs 无法调用 shell 函数
+    #    （会 exec 失败 → remote_fp 空 → 误判「已是最新」，本次踩过）
+    local rf=""
+    rf="$(fetch_remote_install 2>/dev/null || true)"
+    [[ -n "$rf" ]] && remote_fp="$(tools_fp_of "$rf" 2>/dev/null || true)"
+    [[ -n "$rf" ]] && rm -f "$rf"
+    if [[ -z "$remote_fp" || -z "$cur_fp" || "$remote_fp" == "$cur_fp" ]]; then
+      log_info "管理命令已是最新（v${cur}）: ${VPS_TOOLS_CMD}"
+      return 0
+    fi
+    log_warn "版本同为 v${cur}，但远端工具清单已变更（${cur_fp} → ${remote_fp}）——继续更新"
   fi
 
   # 本机正在运行的 install.sh 比远端还新 → 不用远端覆盖自己（防降级）
@@ -338,6 +398,9 @@ install_self() {
   fi
   chmod +x "$tmp"
   mv -f "$tmp" "${VPS_TOOLS_CMD}"
+  # 立刻重载 TOOLS 清单：本进程后续的 install_tool 必须用新清单，
+  # 否则本轮新增的 lib 文件会被漏装（2026-09-19 事故）
+  reload_tools_registry || log_warn "重载工具清单失败，本次安装可能漏装新增文件"
   if [[ -n "$cur" ]]; then
     log_info "已更新管理命令: ${VPS_TOOLS_CMD}（v${cur} → v${got}）"
   else
@@ -395,7 +458,7 @@ interactive_menu() {
   # root 时确保 vps-tools 管理命令就位且为当前版本（管道方式首次运行也生效；
   # 旧版本副本会在无 TTY 下报 /dev/tty 错，故版本不一致也要刷新）
   if [[ $EUID -eq 0 ]]; then
-    install_self || true   # 非 root / 下载失败不阻塞菜单
+    install_self || true   # 非 root / 下载失败不阻塞菜单（成功时会自动重载 TOOLS 清单）
   fi
   # 启动检查更新（离线/同版本静默，不阻塞菜单）
   check_update || true
@@ -464,7 +527,7 @@ EOF
         log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}"
         exit 1
       fi
-      install_self || true   # 管理命令与工具一起保持最新（旧副本有 /dev/tty 报错缺陷）
+      install_self || true   # 管理命令与工具一起保持最新（成功时会自动重载 TOOLS 清单）
       if [[ -n "$tool" ]]; then
         local line
         if line=$(find_tool "$tool"); then
