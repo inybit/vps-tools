@@ -646,7 +646,7 @@ echo ""
 echo "=== [N] 注册表契约（install.sh）==="
 REG_LINE="$(grep -o '^  "vps-backup|[^"]*"' "$REPO/install.sh" | tr -d '"')"
 chk "注册表存在 vps-backup 条目" "[[ -n '$REG_LINE' ]]"
-chk "第 5 字段 interactive_setup=1" "[[ \"\$(cut -d'|' -f5 <<< '$REG_LINE')\" == '1' ]]"
+chk "第 5 字段无安装后子命令（空 = 无参进向导）" "[[ -z \"\$(cut -d'|' -f5 <<< '$REG_LINE')\" ]]"
 chk "env 模板指向 templates/ 且目标为 /etc/vps-backup.env" \
     "[[ \"\$(cut -d'|' -f3 <<< '$REG_LINE')\" == 'backup/vps-backup/templates/vps-backup.env.example' ]]"
 # extra_files 与磁盘逐项比对（漏列 = 安装不完整）

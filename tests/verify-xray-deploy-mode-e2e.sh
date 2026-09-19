@@ -30,6 +30,16 @@ ck() {
   else printf '  [FAIL] %s\n         期望: %s\n         实际: %s\n' "$1" "$3" "$2"; FAIL=$((FAIL+1)); fi
 }
 
+# 等待端口进入 LISTEN（轮询替代固定 sleep，防高负载下假 FAIL）
+wait_listen() {  # $1=端口 [超时秒]
+  local p="$1" t="${2:-10}" i=0
+  while (( i < t*10 )); do
+    ss -ltn 2>/dev/null | grep -q ":${p}" && return 0
+    sleep 0.1; i=$((i+1))
+  done
+  return 1
+}
+
 XRAY_BIN="${XRAY_BIN:-/tmp/hermes-ss2022-e2e/xray}"
 [[ -x "$XRAY_BIN" ]] || { echo "需要 xray: $XRAY_BIN" >&2; exit 1; }
 GEO_ASSET="${GEO_ASSET:-/tmp/geodata}"
@@ -89,7 +99,7 @@ RELAY_PID=""
 start_relay() {
   XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/relay-final.json" >"$TMP/relay.out" 2>&1 &
   RELAY_PID="$!"; TRACKED_PIDS+=("$RELAY_PID")
-  sleep 2
+  wait_listen "$P_RELAY" 15
 }
 stop_relay() {
   [[ -n "$RELAY_PID" ]] && kill "$RELAY_PID" 2>/dev/null
@@ -129,7 +139,7 @@ sleep 1.2
 
 XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/client.json" >"$TMP/client.out" 2>&1 &
 TRACKED_PIDS+=("$!")
-sleep 1.5
+wait_listen "$P_SOCKS" 15
 
 # 生成落地机配置（ss2022 inbound）
 cat > "$TMP/landing-state.json" <<SJ
@@ -146,7 +156,7 @@ jq '.inbounds[0].listen="127.0.0.1"
    "$TMP/landing-cfg.json" > "$TMP/landing-final.json"
 XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/landing-final.json" >"$TMP/landing.out" 2>&1 &
 TRACKED_PIDS+=("$!")
-sleep 2
+wait_listen "$P_LANDING" 15
 echo "[1] 三方就绪"
 ck "  落地机监听" "$(ss -ltn 2>/dev/null | grep -c ":${P_LANDING}")" "1"
 ck "  客户端 SOCKS 监听" "$(ss -ltn 2>/dev/null | grep -c ":${P_SOCKS}")" "1"

@@ -25,6 +25,18 @@ ck() {
   else printf '  [FAIL] %s\n         期望: %s\n         实际: %s\n' "$1" "$3" "$2"; FAIL=$((FAIL+1)); fi
 }
 
+# 等待端口进入 LISTEN（轮询替代固定 sleep）
+# ⚠️ 固定 sleep 2 在高负载下不够（本套件与其它套件串行跑时偶发「落地机监听」假 FAIL），
+#    就绪判据必须是「端口真的 LISTEN」，最多等 wait_listen_timeout 秒。
+wait_listen() {  # $1=端口 [超时秒]
+  local p="$1" t="${2:-10}" i=0
+  while (( i < t*10 )); do
+    ss -ltn 2>/dev/null | grep -q ":${p}" && return 0
+    sleep 0.1; i=$((i+1))
+  done
+  return 1
+}
+
 XRAY_BIN="${XRAY_BIN:-/tmp/hermes-ss2022-e2e/xray}"
 [[ -x "$XRAY_BIN" ]] || { echo "需要真实 xray 二进制: $XRAY_BIN" >&2; exit 1; }
 GEO_ASSET="${GEO_ASSET:-/tmp/geodata}"
@@ -168,7 +180,7 @@ jq --arg a "$TMP/landing.access.log" --arg e "$TMP/landing.err.log" \
    '.log={loglevel:"debug",access:$a,error:$e}' "$TMP/landing-run.json" > "$TMP/landing-final.json"
 XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/landing-final.json" >"$TMP/landing.out" 2>&1 &
 TRACKED_PIDS+=("$!")
-sleep 2
+wait_listen "$P_LANDING" 15
 ck "  落地机监听 ${P_LANDING}" "$(ss -ltn 2>/dev/null | grep -c ":${P_LANDING}")" "1"
 
 # 中转机（带 access log）
@@ -176,7 +188,7 @@ jq --arg a "$TMP/relay.access.log" --arg e "$TMP/relay.err.log" \
    '.log={loglevel:"debug",access:$a,error:$e}' "$TMP/relay-run.json" > "$TMP/relay-final.json"
 XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/relay-final.json" >"$TMP/relay.out" 2>&1 &
 TRACKED_PIDS+=("$!")
-sleep 2
+wait_listen "$P_RELAY" 15
 ck "  中转机监听 ${P_RELAY}" "$(ss -ltn 2>/dev/null | grep -c ":${P_RELAY}")" "1"
 if ! ss -ltn 2>/dev/null | grep -q ":${P_RELAY}"; then
   echo "      -- 中转机启动输出 --"
@@ -188,7 +200,7 @@ fi
 # 客户端
 XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/client.json" >"$TMP/client.out" 2>&1 &
 TRACKED_PIDS+=("$!")
-sleep 2
+wait_listen "$P_SOCKS" 15
 ck "  客户端 SOCKS 监听 ${P_SOCKS}" "$(ss -ltn 2>/dev/null | grep -c ":${P_SOCKS}")" "1"
 echo
 

@@ -15,6 +15,7 @@
 #   - 每个工具自动生成命令入口 /usr/local/bin/<tool>，直接以工具名调用
 #   - 配置模板首次安装时复制到 /etc/<tool>.env（已存在则不覆盖），真实密钥由用户填写
 #   - 定时调度统一用 systemd timer（工具 setup 子命令管理），不使用 crontab
+#   - **安装/更新后不自动执行任何工具命令**：只放脚本 + 生成配置，交互式配置由用户显式执行
 #   - 幂等：重复 install = 覆盖更新
 #   - 首次交互运行自动安装管理命令 /usr/local/bin/vps-tools，之后直接 vps-tools 进入菜单
 #   - 管道方式（curl | sudo bash）也能交互：stdin 被占用时从 /dev/tty 读取输入
@@ -23,7 +24,7 @@
 set -euo pipefail
 
 # ============ 版本号（发布新功能时递增，供启动检查用） ============
-VPS_TOOLS_VERSION="1.7.2"
+VPS_TOOLS_VERSION="1.8.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -42,8 +43,13 @@ VPS_TOOLS_CMD="${CMD_DIR}/vps-tools"     # 管理命令入口
 #   script      install.sh 里要下载的主脚本文件名（相对仓库根，按分类目录组织）
 #   env_template 配置模板文件名（相对仓库根，可为空 = 无配置）
 #   env_target  配置安装目标路径（env_template 为空时忽略）
-#   interactive_setup 安装后是否调用交互式 setup（1=是，工具脚本需支持 setup 子命令；
-#                     配合 systemd timer 管理定时；无 TTY 时跳过并提示手动运行）
+#   post_install 安装后**建议用户手工执行**的子命令（空 = 无参运行工具本身，进交互向导/菜单）。
+#               **仅用于打印下一步指引，安装器绝不代为执行任何工具命令**
+#               （2026-09-19 用户明确要求：安装/更新后不自动执行工具命令）。
+#               ⚠️ 值必须真实存在于该工具的 `-h` 输出里——本字段曾被当作布尔值用，
+#                  导致 docker-install / vps-backup 被提示跑并不存在的 `setup` 子命令。
+#               ⚠️ 一旦安装就自动跑工具会「在安装流程里插入交互提问 + 改变机器状态」，
+#                  且旧实现只对首次安装（env 新生成）触发，行为不一致难以预期。
 #   extra_files 主脚本之外的附加文件（空格分隔的相对路径清单；多文件工具如
 #               vps-init 的 lib/*.sh 和 templates/*.tpl 必须在此列出，否则安装不完整；
 #               可为空 = 单文件工具）
@@ -58,13 +64,13 @@ VPS_TOOLS_CMD="${CMD_DIR}/vps-tools"     # 管理命令入口
 #   backup/    备份类
 #   bench/     测试类（测速/基准）
 TOOLS=(
-  "vnstat-monitor|monitor/vnstat-monitor/vnstat-monitor.sh|monitor/vnstat-monitor/vnstat-monitor.env.example|${CONFIG_DIR}/vnstat-monitor.env|1|"
-  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||0|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/usage.sh"
-  "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env|0|utils/vps-init/lib/common.sh utils/vps-init/lib/sshkey.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl"
-  "vps-bench|bench/vps-bench/vps-bench.sh|||0|"
-  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env|1|utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh"
-  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env|0|web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh"
-  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env|1|backup/vps-backup/lib/common.sh backup/vps-backup/lib/interact.sh backup/vps-backup/lib/pkg.sh backup/vps-backup/lib/restic.sh backup/vps-backup/lib/exclude.sh backup/vps-backup/lib/paths.sh backup/vps-backup/lib/deps.sh backup/vps-backup/lib/repo.sh backup/vps-backup/lib/backup.sh backup/vps-backup/lib/retention.sh backup/vps-backup/lib/restore.sh backup/vps-backup/lib/remote.sh backup/vps-backup/lib/timer.sh backup/vps-backup/lib/status.sh backup/vps-backup/lib/usage.sh"
+  "vnstat-monitor|monitor/vnstat-monitor/vnstat-monitor.sh|monitor/vnstat-monitor/vnstat-monitor.env.example|${CONFIG_DIR}/vnstat-monitor.env|setup|"
+  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/usage.sh"
+  "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env||utils/vps-init/lib/common.sh utils/vps-init/lib/sshkey.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl"
+  "vps-bench|bench/vps-bench/vps-bench.sh|||nodequality|"
+  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env||utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh"
+  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env||web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh"
+  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env||backup/vps-backup/lib/common.sh backup/vps-backup/lib/interact.sh backup/vps-backup/lib/pkg.sh backup/vps-backup/lib/restic.sh backup/vps-backup/lib/exclude.sh backup/vps-backup/lib/paths.sh backup/vps-backup/lib/deps.sh backup/vps-backup/lib/repo.sh backup/vps-backup/lib/backup.sh backup/vps-backup/lib/retention.sh backup/vps-backup/lib/restore.sh backup/vps-backup/lib/remote.sh backup/vps-backup/lib/timer.sh backup/vps-backup/lib/status.sh backup/vps-backup/lib/usage.sh"
 )
 
 # ============ 辅助函数 ============
@@ -124,12 +130,12 @@ list_tools() {
 
 # ============ 核心操作 ============
 install_tool() {  # $1=tool line
-  local line="$1" name script env_tpl env_tgt setup_flag extra_files
+  local line="$1" name script env_tpl env_tgt post_install extra_files
   name=$(tool_field "$line" 1)
   script=$(tool_field "$line" 2)
   env_tpl=$(tool_field "$line" 3)
   env_tgt=$(tool_field "$line" 4)
-  setup_flag=$(tool_field "$line" 5)
+  post_install=$(tool_field "$line" 5)
   extra_files=$(tool_field "$line" 6)
 
   local dest="${INSTALL_DIR}/${name}"
@@ -193,19 +199,21 @@ EOF
     fi
   fi
 
-  # 交互式 setup：工具自带 setup 子命令（systemd timer 管理等）
-  # 仅初次安装 / 卸载重装（env 新生成）触发交互；更新（env 已存在）保留原配置
-  if [[ "$setup_flag" == "1" ]]; then
-    if [[ "$env_was_created" == "1" ]]; then
-      if has_ctty; then
-        log_info "${name} 首次安装，进入交互式配置（触发频率等）"
-        "${CMD_DIR}/${name}" setup
-      else
-        log_warn "无交互终端，跳过交互式配置。稍后手动运行: sudo ${name} setup"
-      fi
-    else
-      log_info "${name} 配置已存在（更新），保留原配置。如需修改: sudo ${name} setup"
-    fi
+  # 安装/更新后**不自动执行任何工具命令**（2026-09-19 用户明确要求）：
+  # 安装器只负责「放脚本 + 生成配置模板 + 生成命令入口」，是否跑工具、何时配置由用户决定。
+  # 第 5 字段 = 建议用户手工执行的子命令（空 = 无参运行工具本身，进交互向导/菜单）。
+  # ⚠️ 绝不代为执行：自动跑会在安装流程里插入交互提问、改变机器状态，
+  #    且旧实现只对「首次安装」触发，行为不一致难以预期。
+  local next_cmd="${name}"
+  [[ -n "$post_install" ]] && next_cmd="${name} ${post_install}"
+  # 无配置文件工具（env_tpl 为空）不能报「配置已存在」——它压根没有配置模板
+  if [[ -z "$env_tpl" ]]; then
+    log_info "下一步（请手动执行）: sudo ${next_cmd}"
+  elif [[ "$env_was_created" == "1" ]]; then
+    log_info "${name} 首次安装完成，配置模板已生成。"
+    log_info "下一步（请手动执行）: 编辑 ${env_tgt} 后运行 sudo ${next_cmd}"
+  else
+    log_info "${name} 配置已存在（更新），保留原配置。如需重新配置: sudo ${next_cmd}"
   fi
 
   log_info "${name} 安装完成。"
