@@ -19,7 +19,7 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
   sudo xray-deploy upgrade         升级 Xray 二进制（失败自动回滚）
   sudo xray-deploy status|restart|uninstall
-  sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / hysteria2 / ss2022）
+  sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / vless-xhttp3-nginx / hysteria2 / ss2022）
   xray-deploy chain show|setup|import|export|test|remove
                                    中转 + 落地（链式代理）管理
   xray-deploy -v, --version        显示版本号
@@ -36,6 +36,13 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   vless-xhttp    VLESS-XHTTP-H2-TLS（真实证书落地，域名需解析到本机；证书可已有路径/acme.sh 自动签发/自签）
                  Xray 26.x 起 h2 transport 迁移至 XHTTP stream-up（HTTP/2）；mihomo 需 v1.19.23+，sing-box 需 extended/lx fork
                  （旧名 vless-h2 兼容，1.3.0 起统一为 vless-xhttp）
+  vless-xhttp3-nginx
+                 VLESS-XHTTP3-NGINX（HTTP/3 QUIC → nginx → h2c/gRPC over UDS → xray）
+                 ⚠️ 需【先装好 nginx】≥1.25.0 且含 --with-http_v3_module（未装则向导直接退出，不代为安装）
+                 xray 只监听 Unix socket（/run/xray-deploy/<name>.socket），不监听任何端口
+                 TLS/QUIC 与证书全部由 nginx 终结（本工具不管理证书）；端口由 nginx 独占
+                 nginx 配置由用户自行编写 —— `info` 会打印一份只读参考（含可粘贴的 grpc_pass 行）
+                 客户端：mihomo 需 v1.19.23+（alpn: [h3]）；sing-box 上游不支持 XHTTP
   hysteria2      Hysteria2 (hy2)（QUIC/UDP，官方默认端口 443 模拟 HTTP/3；自签证书+客户端 insecure，无需 CF token）
                  TCP/UDP 端口独立：与 REALITY 的 TCP 443 可共存；UDP 端口被占时向导会提示是否卸载冲突协议
   ss2022         SS2022 (shadowsocks 2022)（TCP+UDP，2022-blake3-aes-256-gcm 等）

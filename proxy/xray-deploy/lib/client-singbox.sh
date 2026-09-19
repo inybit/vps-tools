@@ -102,12 +102,38 @@ gen_client_singbox_vless_xhttp_reality() {  # 同 mihomo 参数顺序
 EOF
 }
 
+gen_client_singbox_vless_xhttp3_nginx() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey(忽略) $6=sni(忽略) $7=shortid(忽略) $8=domain $9=path
+  # sing-box 上游不支持 XHTTP（含 h3 形态），需 sing-box-extended / lx fork
+  cat <<EOF
+# sing-box 上游不支持 XHTTP，请使用 sing-box-extended 或 sing-box-lx：
+{
+  "type": "vless",
+  "tag": "xray-${1}",
+  "server": "${2}",
+  "server_port": ${3},
+  "uuid": "${4}",
+  "tls": {
+    "enabled": true,
+    "server_name": "${8}",
+    "alpn": ["h3"]
+  },
+  "transport": {
+    "type": "xhttp",
+    "host": "${8}",
+    "path": "${9}",
+    "mode": "stream-one"
+  }
+}
+EOF
+}
+
 gen_client_singbox() {  # $1=type 其余参数透传
   local type="$1"; shift
   case "$type" in
     vless-reality) gen_client_singbox_vless_reality "$@" ;;
     vless-xhttp-reality) gen_client_singbox_vless_xhttp_reality "$@" ;;
     vless-xhttp|vless-h2) gen_client_singbox_vless_xhttp "$@" ;;
+    vless-xhttp3-nginx) gen_client_singbox_vless_xhttp3_nginx "$@" ;;
     hysteria2) gen_client_singbox_hysteria2 "$@" ;;
     ss2022) gen_client_singbox_ss2022 "$@" ;;
     *) die "未实现的客户端生成: ${type}" ;;

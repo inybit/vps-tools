@@ -49,6 +49,11 @@ cmd_info() {
     elif [[ "$type" == "vless-xhttp-reality" ]]; then
       echo "SNI: ${sni}  path: ${path}"
       echo "传输: XHTTP + REALITY + XMUX（无需证书，回落伪装）"
+    elif [[ "$type" == "vless-xhttp3-nginx" ]]; then
+      echo "域名: ${domain}  path: ${path}"
+      echo "传输: HTTP/3 (QUIC/UDP) → nginx → h2c/gRPC over UDS → xray"
+      echo "⚠️ 端口 ${port} 由 nginx 监听，xray 不监听端口（仅 socket）"
+      echo "⚠️ TLS 证书由 nginx 持有 —— 本工具不管理该证书"
     elif [[ "$type" == "vless-xhttp" || "$type" == "vless-h2" ]]; then
       echo "域名: ${domain}  path: ${path}"
       echo "证书: ${cert_file}"
@@ -70,6 +75,16 @@ cmd_info() {
       gen_client_singbox_ss2022 "$name" "$ip" "$port" "$(jq -r ".protocols[$i].method" "$STATE_FILE")" "$password"
     else
       gen_client_singbox "$type" "$name" "$ip" "$port" "$uuid" "$pub" "$sni" "$sid" "$domain" "$path"
+    fi
+    # XHTTP3-NGINX：附 nginx 配置只读参考（D2-b：只打印，不写文件、不 reload nginx）
+    if [[ "$type" == "vless-xhttp3-nginx" ]]; then
+      local sp
+      sp="$(jq -r ".protocols[$i].socket_path // \"\"" "$STATE_FILE")"
+      if [[ -n "$sp" ]]; then
+        xhttp3_print_nginx_reference "$domain" "$port" "$path" "$sp"
+      else
+        log_warn "state 中缺 socket_path 字段——无法生成 nginx 参考（该协议由更早版本添加？）"
+      fi
     fi
     echo
   done

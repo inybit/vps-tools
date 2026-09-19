@@ -34,13 +34,19 @@ cmd_install() {
     vless-reality) params="$(proto_wizard_vless_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp-reality) params="$(proto_wizard_vless_xhttp_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp)   params="$(proto_wizard_vless_xhttp "$name")" || die "协议参数生成失败" ;;
+    vless-xhttp3-nginx) params="$(proto_wizard_vless_xhttp3_nginx "$name")" || die "协议参数生成失败" ;;
     hysteria2)     params="$(proto_wizard_hysteria2 "$name")" || die "协议参数生成失败" ;;
     ss2022)        params="$(proto_wizard_ss2022 "$name")" || die "协议参数生成失败" ;;
     *) die "未知协议类型: $type" ;;
   esac
   state_set --argjson p "$params" '.protocols = [$p]'
 
-  install_service_file
+  # XHTTP3-NGINX 需要 unit 里的 RuntimeDirectory 预建 socket 目录（Xray 不自动建目录）
+  if [[ "$type" == "vless-xhttp3-nginx" ]]; then
+    xhttp3_ensure_service_unit
+  else
+    install_service_file
+  fi
   rebuild_and_reload
   service_start
   log_info "安装完成！运行 'xray-deploy.sh info' 查看节点信息"

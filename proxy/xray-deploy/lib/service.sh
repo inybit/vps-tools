@@ -53,6 +53,10 @@ After=network.target
 
 [Service]
 Type=simple
+# RuntimeDirectory：systemd 建/清 ${UDS_BASE_DIR}（Xray 不自动建 socket 目录；
+# 且 SIGKILL 后残留 socket 会导致重启 bind: address already in use）
+RuntimeDirectory=$(basename "$UDS_BASE_DIR")
+RuntimeDirectoryMode=0755
 ExecStart=${BIN_PATH} run -config ${CONFIG_FILE}
 Environment=XRAY_LOCATION_ASSET=${INSTALL_DIR}
 Restart=on-failure
@@ -64,6 +68,7 @@ WantedBy=multi-user.target
 EOF
       ;;
     openrc)
+      # OpenRC 无 RuntimeDirectory 等价物 → 显式建目录（start_pre）/ 清理（stop_post）
       cat > "/etc/init.d/${SERVICE_NAME}" <<EOF
 #!/sbin/openrc-run
 name="${SERVICE_NAME}"
@@ -74,6 +79,12 @@ pidfile="/run/\${RC_SVCNAME}.pid"
 export XRAY_LOCATION_ASSET="${INSTALL_DIR}"
 depend() {
   need net
+}
+start_pre() {
+  mkdir -p "${UDS_BASE_DIR}" && chmod 0755 "${UDS_BASE_DIR}"
+}
+stop_post() {
+  rm -rf "${UDS_BASE_DIR}"
 }
 EOF
       chmod +x "/etc/init.d/${SERVICE_NAME}"

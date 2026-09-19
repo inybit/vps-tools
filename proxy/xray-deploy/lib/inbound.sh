@@ -60,6 +60,23 @@ protocol_to_inbound() {  # $1=协议参数 JSON → 输出 inbound JSON（数组
         sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
       }' <<<"$json"
       ;;
+    vless-xhttp3-nginx)
+      # VLESS + XHTTP + UDS：TLS/QUIC 由 nginx 终结，xray 只监听 Unix Domain Socket
+      # 无 tlsSettings / 无 REALITY（明文 h2c，nginx 用 grpc_pass unix: 转发）
+      # 依据：XTLS/Xray-examples/VLESS-XHTTP3-Nginx/server.jsonc
+      #   - listen 支持 "<路径>,<八进制权限>"（transport/internet/system_listener.go）
+      #   - 绝对路径判为 UDS，port 必须省略（infra/conf/xray.go）
+      #   - 明文服务端同时支持 HTTP/1.1 与 h2c（splithttp/hub.go）
+      jq '{
+        tag: .name, listen: (.socket_path + ",0666"), protocol: "vless",
+        settings: { clients: [{ id: .uuid }], decryption: "none" },
+        streamSettings: {
+          network: "xhttp",
+          xhttpSettings: { mode: "stream-one", path: .path }
+        },
+        sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
+      }' <<<"$json"
+      ;;
     hysteria2)
       # Hysteria 2：QUIC/UDP，官方默认端口 443（模拟 HTTP/3 流量）
       # Xray 协议名 hysteria + version 2

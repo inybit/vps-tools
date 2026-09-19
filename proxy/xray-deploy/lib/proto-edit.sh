@@ -16,6 +16,8 @@ proto_edit() {
   echo "  1) 端口"
   if [[ "$type" == "vless-xhttp" || "$type" == "vless-h2" ]]; then
     echo "  2) 域名（需同步更新证书/客户端）"
+  elif [[ "$type" == "vless-xhttp3-nginx" ]]; then
+    echo "  2) 域名（客户端 SNI / nginx server_name，需同步更新 nginx 配置）"
   elif [[ "$type" == "hysteria2" ]]; then
     echo "  2) SNI/域名（重签证书）"
   else
@@ -27,7 +29,9 @@ proto_edit() {
     echo "  5) masquerade 伪装 URL（回车清空禁用）"
   else
     echo "  3) 重新生成 UUID"
-    [[ "$type" == "vless-xhttp-reality" ]] && echo "  4) XHTTP path"
+    if [[ "$type" == "vless-xhttp-reality" || "$type" == "vless-xhttp3-nginx" ]]; then
+      echo "  4) XHTTP path"
+    fi
   fi
   read -r -p "选择 [1-5]: " sel
   case "${sel:-1}" in
@@ -37,6 +41,11 @@ proto_edit() {
       [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge 1 ]] && [[ "$port" -le 65535 ]] || die "无效端口"
       if [[ "$type" == "hysteria2" ]]; then
         port_in_use "$port" udp && die "端口 ${port}/UDP 已被占用"
+        ensure_firewall "$port" udp
+      elif [[ "$type" == "vless-xhttp3-nginx" ]]; then
+        # nginx 需独占该端口（TCP 与 UDP 两侧）；不查 port_in_use（443 本就该由 nginx 监听）
+        xhttp3_check_port_conflict "$port" "$name"
+        ensure_firewall "$port" tcp
         ensure_firewall "$port" udp
       else
         if [[ "$type" == "vless-reality" || "$type" == "vless-xhttp-reality" ]]; then
@@ -61,6 +70,14 @@ proto_edit() {
         cert_file="${certs%% *}"; key_file="${certs##* }"
         state_set --arg n "$name" --arg domain "$domain" --arg cert_file "$cert_file" --arg key_file "$key_file" \
           '.protocols = [.protocols[] | if .name==$n then (.domain=$domain | .cert_file=$cert_file | .key_file=$key_file) else . end]'
+      elif [[ "$type" == "vless-xhttp3-nginx" ]]; then
+        # 证书由 nginx 持有 → 本工具不涉及证书文件，只改 SNI 域名
+        local domain
+        read -r -p "新域名（客户端 SNI / nginx server_name）: " domain
+        [[ -n "$domain" ]] || die "域名不能为空"
+        state_set --arg n "$name" --arg domain "$domain" \
+          '.protocols = [.protocols[] | if .name==$n then .domain=$domain else . end]'
+        log_warn "域名已改——请同步更新 nginx 的 server_name 与客户端 servername"
       elif [[ "$type" == "hysteria2" ]]; then
         local domain certs cert_file key_file
         read -r -p "新 SNI/域名: " domain
@@ -89,13 +106,17 @@ proto_edit() {
       fi
       ;;
     4)
-      if [[ "$type" == "vless-xhttp-reality" ]]; then
+      if [[ "$type" == "vless-xhttp-reality" || "$type" == "vless-xhttp3-nginx" ]]; then
         local path
         read -r -p "新 XHTTP path [当前 $(jq -r --arg n "$name" '.protocols[] | select(.name==$n) | .path' "$STATE_FILE")]: " path
         [[ "$path" == /* ]] || die "path 必须以 / 开头"
         state_set --arg n "$name" --arg path "$path" \
           '.protocols = [.protocols[] | if .name==$n then .path=$path else . end]'
-        log_info "path 已更新为 ${path}（客户端需同步修改 xhttp-opts.path）"
+        if [[ "$type" == "vless-xhttp3-nginx" ]]; then
+          log_info "path 已更新为 ${path}（客户端 xhttp-opts.path + nginx location 都需同步修改）"
+        else
+          log_info "path 已更新为 ${path}（客户端需同步修改 xhttp-opts.path）"
+        fi
         rebuild_and_reload
         return 0
       fi

@@ -26,6 +26,7 @@ proto_add() {
     vless-reality) params="$(proto_wizard_vless_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp-reality) params="$(proto_wizard_vless_xhttp_reality "$name")" || die "协议参数生成失败" ;;
     vless-xhttp|vless-h2) params="$(proto_wizard_vless_xhttp "$name")" || die "协议参数生成失败" ;;
+    vless-xhttp3-nginx) params="$(proto_wizard_vless_xhttp3_nginx "$name")" || die "协议参数生成失败" ;;
     hysteria2) params="$(proto_wizard_hysteria2 "$name")" || die "协议参数生成失败" ;;
     ss2022) params="$(proto_wizard_ss2022 "$name")" || die "协议参数生成失败" ;;
     *) die "未实现的协议向导: ${type}" ;;
@@ -33,6 +34,8 @@ proto_add() {
 
   # 追加到 state（参数对象），inbound 由 build_config 推导
   state_set --argjson p "$params" '.protocols += [$p]'
+  # XHTTP3-NGINX 需重写 unit（RuntimeDirectory 预建 socket 目录；既有 unit 不含该指令）
+  [[ "$type" == "vless-xhttp3-nginx" ]] && xhttp3_ensure_service_unit
   rebuild_and_reload
   log_info "协议 ${name}（${type}）已添加"
 }
@@ -53,7 +56,7 @@ proto_remove() {
 
 proto_list_names() {
   log_info "现有协议:"
-  jq -r '.protocols | to_entries[] | "  [\(.key+1)] \(.value.name)  (\(.value.type))  端口 \(.value.port)\(if .value.type == "hysteria2" then "/UDP" elif .value.type == "ss2022" then "/TCP+UDP" else "" end)  \(if (.value.type == "vless-xhttp" or .value.type == "vless-h2") then "域名 " + .value.domain elif .value.type == "hysteria2" then "SNI " + (.value.domain // "-") elif .value.type == "vless-xhttp-reality" then "SNI " + .value.sni + "  path " + .value.path elif .value.type == "ss2022" then "method " + .value.method else "SNI " + .value.sni end)"' "$STATE_FILE"
+  jq -r '.protocols | to_entries[] | "  [\(.key+1)] \(.value.name)  (\(.value.type))  端口 \(.value.port)\(if .value.type == "hysteria2" then "/UDP" elif .value.type == "ss2022" then "/TCP+UDP" elif .value.type == "vless-xhttp3-nginx" then "/TCP+UDP(nginx)" else "" end)  \(if (.value.type == "vless-xhttp" or .value.type == "vless-h2") then "域名 " + .value.domain elif .value.type == "hysteria2" then "SNI " + (.value.domain // "-") elif .value.type == "vless-xhttp-reality" then "SNI " + .value.sni + "  path " + .value.path elif .value.type == "vless-xhttp3-nginx" then "域名 " + .value.domain + "  path " + .value.path + "  socket " + .value.socket_path elif .value.type == "ss2022" then "method " + .value.method else "SNI " + .value.sni end)"' "$STATE_FILE"
 }
 
 # 解析协议选择：支持序号（[1]）或名称；输出协议 name；找不到 die

@@ -8,8 +8,8 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.8.0` |
-| 结构 | 多文件（入口 + 25 lib） |
+| 版本 | `1.9.0` |
+| 结构 | 多文件（入口 + 26 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
 | 服务 | systemd / OpenRC |
@@ -52,6 +52,7 @@ xray-deploy -h, --help           显示本帮助
 | `vless-reality`（默认） | VLESS-TCP-XTLS-Vision-REALITY | 无需 | 成熟稳定，TCP 性能好 |
 | `vless-xhttp-reality` | VLESS-XHTTP-REALITY（含 XMUX） | 无需 | 抗封锁更强；**仅 mihomo 系客户端**（sing-box 上游无 XHTTP） |
 | `vless-xhttp` | VLESS-XHTTP-H2-TLS | 需域名解析到本机 | 真实证书，兼容性最广（旧名 `vless-h2` 兼容） |
+| `vless-xhttp3-nginx` | VLESS-XHTTP3-NGINX（HTTP/3 QUIC → nginx → UDS → xray） | **由 nginx 持有** | 需先装 nginx ≥1.25.0（含 `--with-http_v3_module`）；xray 只监听 Unix socket |
 | `hysteria2` | Hysteria2（QUIC/UDP） | 需域名（自签亦可） | 弱网/高丢包环境优势 |
 | `ss2022` | Shadowsocks 2022 | 无需 | ⚠️ **仅用于中转→落地一跳**，不要用于出境段 |
 
@@ -155,16 +156,36 @@ xray-deploy chain mode                        查看当前模式（只读，无�
 - **配置原子替换**：`config.json.tmp` + `xray -test` 校验通过才 `mv` 生效，
   校验失败保留线上配置。
 
+### vless-xhttp3-nginx 专属
+
+- **必须先装 nginx（≥1.25.0 且含 `--with-http_v3_module`）**：向导首步检测，
+  未安装则直接退出且**不写 state.json**（零副作用），不代为安装。
+- **xray 不监听任何端口**，只监听 `/run/xray-deploy/<name>.socket`（0666）。
+  `port` 字段语义是 **nginx 的对外端口**，不是 xray 监听端口。
+- **Xray 不自动创建 socket 所在目录**：`-test` 会静默通过，运行时才报
+  `failed to listen Unix Domain Socket`。目录由 systemd `RuntimeDirectory`
+  （systemd）或 `start_pre`（OpenRC）预建。
+- **SIGKILL 残留 socket 会导致重启必失败**（`bind: address already in use`，
+  实测 3/3）。SIGTERM 会自动清理。故 socket 落 `/run/xray-deploy/` +
+  `RuntimeDirectory`（systemd 在进程被 SIGKILL 后仍会清理该目录）。
+- **两个 inbound 用同一 UDS 路径时 `xray -test` 静默通过**，运行时第二个被吞
+  （实测 `/p1` 可达、`/p2` 404）→ 向导主动检查路径唯一性。
+- **端口与既有协议互斥**：nginx 需独占 TCP（TLS/H2）与 UDP（QUIC）两侧，
+  向导会检查既有 reality / xhttp / ss2022 / hy2 是否占用。
+- **`location` 必须带尾斜杠**：`mode: stream-one` 下客户端请求的是 `<path>/`
+  （`splithttp/config.go` 的 `GetNormalizedPath()`），`info` 打印的参考已按此生成。
+- **TLS 证书由 nginx 持有**，本工具不管理证书；`info` 打印的证书路径是占位符。
+
 ## 文件结构
 
 ```
 proxy/xray-deploy/
 ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-└── lib/                    # 25 模块
+└── lib/                    # 26 模块
     ├── common.sh service.sh state.sh xray-bin.sh keys.sh registry.sh
     ├── fallback-data.sh fallback.sh globalping.sh
     ├── inbound.sh outbound.sh routing.sh chain.sh chain-info.sh ss2022.sh
-    ├── proto-wizard.sh proto-crud.sh proto-edit.sh
+    ├── proto-wizard.sh xhttp3.sh proto-crud.sh proto-edit.sh
     ├── client-mihomo.sh client-singbox.sh client-ss2022.sh
     └── cmd-lifecycle.sh cmd-info.sh cmd-fallback.sh usage.sh
 ```
@@ -178,6 +199,7 @@ bash tests/run-all.sh xray      # 全部 xray 相关套件
 | 套件 | 说明 |
 |---|---|
 | `verify-xray-deploy-routing.sh` | 分流规则（56 断言，含 geosite 标签实测） |
+| `verify-xray-deploy-xhttp3-nginx.sh` | vless-xhttp3-nginx（67 断言：触点/nginx 门/冲突/unit/info，含真实 xray -test） |
 | `verify-xray-deploy-chain.sh` | 链式代理（46 断言） |
 | `verify-xray-deploy-latest.sh` | 版本查询 / 升级防降级 |
 | `verify-xray-deploy-behavior.sh` | 行为契约 |

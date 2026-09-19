@@ -94,6 +94,31 @@ gen_client_mihomo_vless_xhttp_reality() {  # $1=name $2=ip $3=port $4=uuid $5=pu
 EOF
 }
 
+gen_client_mihomo_vless_xhttp3_nginx() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey(忽略) $6=sni(忽略) $7=shortid(忽略) $8=domain $9=path
+  # HTTP/3 (QUIC) 传输：alpn: [h3] 触发 mihomo 走 http3.Transport
+  #   依据 mihomo transport/xhttp/client.go:159 `if len(alpn)==1 && alpn[0]=="h3"`
+  # 无 REALITY → 不需要 support-x25519mlkem768
+  # 不生成 reuse-settings(XMUX)：填了须对齐用户 nginx 上限（默认 128/1000/3600），
+  #   留空则取 mihomo 保守默认（16-32 / 600-900 / 1800-3000）
+  cat <<EOF
+  - name: "xray-${1}"
+    type: vless
+    server: ${2}
+    port: ${3}
+    uuid: ${4}
+    network: xhttp
+    udp: true
+    tls: true
+    servername: ${8}
+    alpn:
+      - h3
+    client-fingerprint: chrome
+    xhttp-opts:
+      path: ${9}
+      mode: stream-one
+EOF
+}
+
 # 生成某协议的客户端片段（按类型分发）
 gen_client_mihomo() {  # $1=type 其余参数透传
   local type="$1"; shift
@@ -101,6 +126,7 @@ gen_client_mihomo() {  # $1=type 其余参数透传
     vless-reality) gen_client_mihomo_vless_reality "$@" ;;
     vless-xhttp-reality) gen_client_mihomo_vless_xhttp_reality "$@" ;;
     vless-xhttp|vless-h2) gen_client_mihomo_vless_xhttp "$@" ;;
+    vless-xhttp3-nginx) gen_client_mihomo_vless_xhttp3_nginx "$@" ;;
     hysteria2) gen_client_mihomo_hysteria2 "$@" ;;
     ss2022) gen_client_mihomo_ss2022 "$@" ;;
     *) die "未实现的客户端生成: ${type}" ;;

@@ -12,6 +12,7 @@ PROTO_REGISTRY=(
   "vless-reality|VLESS-TCP-XTLS-Vision-REALITY|xray"
   "vless-xhttp-reality|VLESS-XHTTP-REALITY (XHTTP+XMUX)|xray"
   "vless-xhttp|VLESS-XHTTP-H2-TLS|xray"
+  "vless-xhttp3-nginx|VLESS-XHTTP3-NGINX (HTTP/3 + UDS)|xray"
   "hysteria2|Hysteria2 (hy2)|xray"
   "ss2022|SS2022 (shadowsocks 2022)|xray"
 )

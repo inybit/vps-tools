@@ -143,7 +143,7 @@ ck "proto_exists 已知协议" "$(grep -oP 'pe1=\K.*' <<<"$fo")" "yes"
 ck "proto_exists 未知协议" "$(grep -oP 'pe2=\K.*' <<<"$fo")" "no"
 ck "proto_display 返回显示名" "$(grep -oP 'pd=\K.*' <<<"$fo")" "VLESS-TCP-XTLS-Vision-REALITY|xray"
 ck "FALLBACK_CANDIDATES 非空（≥100）" "$([[ "$(grep -oP 'cands=\K\d+' <<<"$fo")" -ge 100 ]] && echo ok)" "ok"
-ck "PROTO_REGISTRY 协议数与磁盘一致" "$(grep -oP 'protos=\K\d+' <<<"$fo")" "5"
+ck "PROTO_REGISTRY 协议数与磁盘一致" "$(grep -oP 'protos=\K\d+' <<<"$fo")" "6"
 ck "xray_asset_suffix 正常" "$(grep -oP 'asset=\K.*' <<<"$fo")" "linux-64.zip"
 echo
 
