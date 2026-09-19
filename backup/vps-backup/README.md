@@ -9,8 +9,8 @@ restic + rclone(Google Drive) 备份与灾难恢复。每台 VPS 独立 repo
 | | |
 |---|---|
 | 域 | `backup/` |
-| 版本 | `1.3.0` |
-| 结构 | 多文件（入口 + 15 lib） |
+| 版本 | `1.4.0` |
+| 结构 | 多文件（入口 + 16 lib） |
 | 依赖 | restic, rclone（`vps-backup deps` 自带 sha256 校验安装）, curl |
 | 配置 | `/etc/vps-backup.env`（600） |
 | 密码 | `/etc/restic-password`（600，**丢失 = 备份永久不可读**） |
@@ -209,6 +209,17 @@ systemd timer：`vps-backup-backup@core.timer` / `@data.timer` / `vps-backup-mai
 
 ## 已知坑（实现与运维）
 
+- **⚠️ systemd 单元不设置 `HOME` → restic 缺缓存目录直接失败（2026-09-19 anthony 真机故障）**。
+  症状极具迷惑性：**手动跑一切正常，只有 timer 跑必挂**，报
+  `unable to open cache: unable to locate cache directory: neither $XDG_CACHE_HOME nor $HOME are defined`。
+  systemd 系统级 manager 的环境里 `HOME`/`XDG_CACHE_HOME` 都不存在（`systemctl show <unit> -p Environment` 为空、
+  `User=` 也为空），restic 无处推导缓存路径就**拒绝工作**（退出非零）。
+  工具 v1.4.0 起在 `load_env` 显式 `export RESTIC_CACHE_DIR`（默认 `/var/cache/vps-backup`，
+  可用 env 文件里的 `VP_CACHE_DIR` 覆盖；外部已设值优先），并在前置闸门里体检可写性。
+  `/var/cache` 本就在排除表内，缓存不会自我备份。
+  **通用判据：凡「交互式正常、systemd 定时失败」的故障，先查单元环境里缺哪些变量**
+  （`systemctl show <unit> -p Environment` + `systemd-run --property=... /usr/bin/env` 实测），
+  不要把持久行为建立在环境推导上。
 - **`restic forget --keep-last 0` 不能清空快照**（`Fatal: no policy was specified`）。
   清空必须 `snapshots --json` 取 ID 再 `forget <ID...>`，之后 `prune` 回收空间。
 - **`restic unlock` 只清陈旧锁**，被存活进程持有的锁它不动却「成功返回」→ 工具必须

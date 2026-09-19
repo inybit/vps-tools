@@ -2,26 +2,21 @@
 #
 # vps-backup — restic + rclone(Google Drive) VPS 备份与灾难恢复
 #
-# 用法:
-#   vps-backup                    向导: 依赖 → repo 连接 → 备份范围 → 通知 → timer → runbook
-#   vps-backup deps               安装/更新 restic + rclone（官方二进制 + sha256 校验）
-#   vps-backup connect            只连接 repo（不 init —— 恢复场景用）
-#   vps-backup init               初始化 repo（仅首次）
-#   vps-backup backup [层]        备份 core / data / all
-#   vps-backup snapshots|ls|dump  只读侦察
-#   vps-backup restore <快照> --target <目录>   恢复（必须显式 target）
-#   vps-backup forget|prune|maintain|check      保留策略与完整性校验
-#   vps-backup paths [show|set|edit|check]   查看/自定义备份路径（core/data 分层）
-#   vps-backup exclude [list|add|remove]     管理排除表（自定义路径时配套）
-#   vps-backup status             状态汇总
-#   vps-backup runbook            生成灾难恢复 runbook
-#   vps-backup install-timer|timer-status|uninstall-timer
-#   vps-backup -v / -h            版本 / 帮助
+# 用法（完整清单见 `vps-backup -h`）:
+#   无参                          向导: 依赖 → 密码 → repo 连接 → 备份范围 → 通知 → timer → runbook
+#   deps|connect|init             装依赖 / 只连接(恢复用) / 初始化 repo(仅首次)
+#   backup [core|data|all]        分层备份
+#   snapshots|ls|dump             只读侦察
+#   restore <快照> --target <目录>  恢复（必须显式 target，绝不裸覆盖 /）
+#   forget|prune|maintain|check   保留策略与完整性校验
+#   paths|exclude|status|runbook  路径/排除表/状态/灾难恢复手册
+#   install-timer|timer-status|uninstall-timer
+#   -v / -h                       版本 / 帮助
 #
 # 配置: /etc/vps-backup.env（600）；密码: /etc/restic-password（600）
 # 铁律: 凭证不入备份包；connect 与 init 严格分离；报成功前实测服务端状态
 
-VP_VERSION="1.3.0"
+VP_VERSION="1.4.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -33,6 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/pkg.sh"
 # shellcheck source=lib/restic.sh
 . "${SCRIPT_DIR}/lib/restic.sh"
+# shellcheck source=lib/cache.sh
+. "${SCRIPT_DIR}/lib/cache.sh"
 # shellcheck source=lib/deps.sh
 . "${SCRIPT_DIR}/lib/deps.sh"
 # shellcheck source=lib/repo.sh

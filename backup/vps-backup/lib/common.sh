@@ -73,4 +73,18 @@ load_env() {
   # （放在 load_env 而非 backup 内部：restic 拉起的 rclone 子进程继承本变量）
   export RCLONE_DRIVE_STOP_ON_UPLOAD_LIMIT="${RCLONE_DRIVE_STOP_ON_UPLOAD_LIMIT:-true}"
   export RESTIC_PASSWORD_FILE="${VP_PASSWORD_FILE}"
+
+  # ---------- restic 缓存目录（systemd 环境下必给，否则 restic 直接拒绝工作） ----------
+  # ⚠️ 根因（2026-09-19 anthony 真机实测）：systemd 单元**不设置 HOME**（也设不了，
+  #    `User=` 为空 = 系统 manager 环境，`HOME`/`XDG_CACHE_HOME` 全未定义）。
+  #    restic 无 --cache-dir / 无 RESTIC_CACHE_DIR 时按 $XDG_CACHE_HOME 或 $HOME 推导，
+  #    两者都没有 → `unable to open cache: unable to locate cache directory` 且**退出非零**。
+  #    症状极具迷惑性：**交互式（有 HOME）一切正常，只有 timer 跑必挂**——
+  #    「我手动跑得好好的，为什么定时备份失败」就是这个。
+  # ⚠️ 为什么不是「无 HOME 时回退 $HOME」之类的小修：那等于把持久行为绑在环境推导上。
+  #    这里**显式声明**缓存落点（与 VP_HOST 必须钉死同一个道理），
+  #    交互式与 systemd 两条路径行为完全一致，且 `/var/cache` 本就在排除表内（缓存不入备份包）。
+  # 外部环境变量优先：已设的 RESTIC_CACHE_DIR 不覆盖（与上面 VP_RCLONE_CONFIG 同约定）。
+  : "${VP_CACHE_DIR:=/var/cache/vps-backup}"
+  export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-${VP_CACHE_DIR}}"
 }

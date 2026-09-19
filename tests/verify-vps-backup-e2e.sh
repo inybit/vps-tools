@@ -55,6 +55,9 @@ export VP_PASSWORD_FILE="$BASE/restic-password"
 export VP_EXCLUDE_FILE="$BASE/exclude"
 export VP_RUNBOOK_FILE="$BASE/VPS-RESTORE.md"
 export VP_UNIT_DIR="$BASE/units"
+# 缓存目录也必须隔离：默认 /var/cache/vps-backup 在非 root 下建不出来，
+# 而它现在是 restic 的硬前提（fail-closed）→ 不隔离则 E2E 从 [1] 起全线失败（2026-09-19 踩过）
+export VP_CACHE_DIR="$BASE/cache"
 export VP_BACKUP_CORE_PATHS="$SRC/etc $SRC/home"
 export VP_BACKUP_DATA_PATHS="$SRC/data"
 export VP_NOTIFY=0

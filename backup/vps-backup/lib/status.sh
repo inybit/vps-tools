@@ -44,6 +44,9 @@ vp_status_main() {
 
   vp_remote_check || true
 
+  # 缓存目录：status 的「快照新鲜度」要真调 restic，缺它同样会失败（且是 systemd 下的默认状态）
+  vp_ensure_cache_dir || true
+
   echo "" >&2
   log_info "快照新鲜度:"
   vp_staleness_check core || true

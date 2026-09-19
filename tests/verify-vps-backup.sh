@@ -42,6 +42,9 @@ export VP_RUNBOOK_FILE="$TMP/VPS-RESTORE.md"
 export VP_RESTIC_BIN="$MOCK_BIN/restic"
 export VP_RCLONE_BIN="$MOCK_BIN/rclone"
 export VP_UNIT_DIR="$TMP/units"
+# 缓存目录也必须隔离：默认 /var/cache/vps-backup 在非 root 下建不出来，
+# 而它现在是 restic 的硬前提（fail-closed）→ 不隔离则整份 harness 全线失败（2026-09-19 踩过）。
+export VP_CACHE_DIR="$TMP/cache"
 export VP_EUID=0
 export VP_HOST="testhost"
 export VP_YES=1
@@ -171,9 +174,12 @@ chk "无 [[ -r /dev/tty ]] 伪判据（仅注释可提）" \
 chk "包管理器探测用 if/elif 而非 && 链" \
     "grep -q 'if command -v apk' ${TOOL_DIR}/lib/pkg.sh && ! grep -qE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' ${TOOL_DIR}/lib/pkg.sh"
 chk "拆分后模块齐全（common/interact/pkg/restic/remote 各司其职）" \
-    "( for f in common interact pkg restic deps exclude backup paths repo remote retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done )"
-chk "单文件 ≤200 行（架构规约）" \
-    "! awk 'END{if(NR>200) exit 1}' ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh 2>/dev/null | grep ."
+    "( for f in common interact pkg restic cache deps exclude backup paths repo remote retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done )"
+# ⚠️ 逐文件判定，且**不能**写 `awk '...' files | grep .`：
+#  * awk 跨多文件时 NR 是**累计**行数 → 单个文件超限会被总量掩盖
+#  * `awk|grep .` 的退出码取决于 grep，awk 的 exit 1 被管道吃掉 → 恒 PASS（假绿，2026-09-19 修正）
+chk "单文件 ≤200 行（架构规约，逐文件判定）" \
+    "( for f in ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh; do n=\$(wc -l < \"\$f\"); [[ \$n -le 200 ]] || { echo \"\$f=\$n\"; exit 1; }; done )"
 
 echo ""
 echo "=== [B] 依赖安装 fail-closed ==="
@@ -630,6 +636,53 @@ chk "向导先过密码再连 repo（顺序正确）" \
 chk "向导最终完成并给出 runbook 路径" "grep -q '向导完成' '$TMP/wiz.out'"
 # 密码已存在时向导必须直接跳过，不得重复询问（幂等）
 chk "密码已存在 → 不重复询问生成" "! grep -q '自动生成强密码' '$TMP/wiz.out'"
+
+echo ""
+echo "=== [P] restic 缓存目录（systemd 无 HOME 环境下必给，2026-09-19 真机故障回归） ==="
+# 背景：systemd 单元不设置 HOME/XDG_CACHE_HOME（`User=` 为空 = 系统 manager 环境），
+# restic 缺 RESTIC_CACHE_DIR 时直接 `unable to open cache: unable to locate cache directory`
+# 并退出非零。症状极具迷惑性：**交互式（有 HOME）一切正常，只有 timer 跑必挂**。
+# 契约：load_env 必须导出 RESTIC_CACHE_DIR；外部已设值不得被覆盖；不可写要 fail-closed。
+CACHE_PROBE="$TMP/cache-probe"
+# 干净子进程（不预设 RESTIC_CACHE_DIR）—— 专测工具自己有没有导出（同 [O] 组的教训）
+# ⚠️ 必须同时 -u VP_CACHE_DIR：harness 全局导出了它（隔离用），否则测到的是 harness 的值
+SEEN_CACHE="$(env -u RESTIC_CACHE_DIR -u VP_CACHE_DIR -u HOME -u XDG_CACHE_HOME VP_ENV_FILE="$TMP/vps-backup.env" \
+        bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; load_env >/dev/null 2>&1; printf '%s' \"\${RESTIC_CACHE_DIR:-}\"" 2>/dev/null)"
+chk "无 HOME 环境下 load_env 仍导出 RESTIC_CACHE_DIR（timer 路径可用）" \
+    "[[ -n \"\$SEEN_CACHE\" ]]"
+chk "缓存默认落点为 /var/cache/vps-backup" "[[ \"\$SEEN_CACHE\" == '/var/cache/vps-backup' ]]"
+# 外部环境变量优先（与 VP_RCLONE_CONFIG 同约定）：已设值必须原样保留
+SEEN_CACHE2="$(env -u HOME -u XDG_CACHE_HOME RESTIC_CACHE_DIR="$CACHE_PROBE" VP_ENV_FILE="$TMP/vps-backup.env" \
+        bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; load_env >/dev/null 2>&1; printf '%s' \"\${RESTIC_CACHE_DIR:-}\"" 2>/dev/null)"
+chk "外部已设 RESTIC_CACHE_DIR 不被覆盖" "[[ \"\$SEEN_CACHE2\" == '$CACHE_PROBE' ]]"
+# VP_CACHE_DIR 是 env 文件里的可配项
+SEEN_CACHE3="$(env -u RESTIC_CACHE_DIR -u HOME -u XDG_CACHE_HOME VP_CACHE_DIR="$CACHE_PROBE/viaenv" VP_ENV_FILE="$TMP/vps-backup.env" \
+        bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; load_env >/dev/null 2>&1; printf '%s' \"\${RESTIC_CACHE_DIR:-}\"" 2>/dev/null)"
+chk "VP_CACHE_DIR 可覆盖缓存落点" "[[ \"\$SEEN_CACHE3\" == '$CACHE_PROBE/viaenv' ]]"
+# 体检行为：可写 → 0；不可写 → 非 0 且给可执行指引
+mkdir -p "$CACHE_PROBE/ok"
+chk "缓存目录体检：可写返回 0" \
+    "env RESTIC_CACHE_DIR='$CACHE_PROBE/ok' bash -c \"source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; source '$TOOL_DIR/lib/cache.sh' >/dev/null 2>&1; vp_ensure_cache_dir\" 2>/dev/null"
+mkdir -p "$CACHE_PROBE/nonexistent-parent" && chmod 500 "$CACHE_PROBE/nonexistent-parent"
+if [[ "$EUID" -ne 0 ]]; then   # root 无视权限位，此断言只在非 root 下有判别力
+  chk "缓存目录不可创建 → 非 0（fail-closed）" \
+      "! env RESTIC_CACHE_DIR='$CACHE_PROBE/nonexistent-parent/sub' bash -c \"source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; source '$TOOL_DIR/lib/cache.sh' >/dev/null 2>&1; vp_ensure_cache_dir\" 2>/dev/null"
+  # ⚠️ 先落文件再 grep：本 harness 开了 pipefail，`cmd | grep -q` 命中即 SIGPIPE → 假 FAIL
+  env RESTIC_CACHE_DIR="$CACHE_PROBE/nonexistent-parent/sub" \
+      bash -c "source '$TOOL_DIR/lib/common.sh' >/dev/null 2>&1; source '$TOOL_DIR/lib/cache.sh' >/dev/null 2>&1; vp_ensure_cache_dir" \
+      > "$TMP/cacheerr" 2>&1 || true
+  chk "不可用时给出可执行修复指引" "grep -q 'RESTIC_CACHE_DIR' '$TMP/cacheerr'"
+fi
+chmod 700 "$CACHE_PROBE/nonexistent-parent" 2>/dev/null || true
+# 前置闸门覆盖：备份/恢复/校验路径都必须走同一个体检（子命令分发会绕过主流程前置检查）
+chk "vp_require_tools 包含缓存体检（单一闸门，子命令也走）" \
+    "grep -q 'vp_require_tools() { vp_tools_check || return 1; vp_ensure_cache_dir; }' ${TOOL_DIR}/lib/restic.sh"
+chk "cache.sh 被入口 source" "grep -q 'lib/cache.sh' '$TOOL'"
+# 缓存不入备份包（/var/cache 在默认排除表内）——否则缓存元数据会被自己备份进去
+chk "默认排除表含 /var/cache（缓存不入备份包）" \
+    "grep -qF '/var/cache' '${TOOL_DIR}/lib/exclude.sh'"
+chk "默认缓存落点在排除表覆盖范围内（缓存不会自我备份）" \
+    "grep -q 'VP_CACHE_DIR:=/var/cache/' ${TOOL_DIR}/lib/common.sh"
 
 echo ""
 echo "=== [M] CLI 契约 ==="

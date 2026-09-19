@@ -187,4 +187,6 @@ vp_tools_check() {
 }
 
 # 依赖体检（子命令路径也要调用 —— 分发会绕过主流程前置检查）
-vp_require_tools() { vp_tools_check; }
+# 缓存目录也在这里检查：它是 restic 的**硬前提**（systemd 无 HOME 时缺它必挂），
+# 与「二进制能否执行」同级，必须共用同一个前置闸门，否则子命令路径又会绕过。
+vp_require_tools() { vp_tools_check || return 1; vp_ensure_cache_dir; }
