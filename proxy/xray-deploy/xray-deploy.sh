@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.10.1"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,6 +39,10 @@ GEO_SOURCE="https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download
 #    改用 releases 列表取首个（按发布时间倒序，draft 已由 GitHub 排除）。
 # per_page=30：安装向导的「版本选择」菜单要列最近 10 个版本（见 xray-bin.sh）
 GITHUB_API="https://api.github.com/repos/XTLS/Xray-core/releases?per_page=30"
+# ⚠️ API 兜底通道（2026-09-21 用户真机 403 报障后新增）：
+#    未认证 API 配额仅 60 次/时/IP，超限返回 HTTP 403 → 安装向导第一步就卡死。
+#    releases.atom 无配额/无需 token，实测 tag 序列与 API 完全一致（条数 10 vs 30）。
+XRAY_ATOM="https://github.com/XTLS/Xray-core/releases.atom"
 
 # lib/ 模块加载（顺序无关：函数在分发时才解析；顶层常量均在运行时使用）
 LIB_DIR="${SCRIPT_DIR}/lib"

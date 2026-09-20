@@ -73,8 +73,15 @@ else
   newer="$([[ "$tag" =~ ^v26\.(9|[1-9][0-9]) ]] && echo yes || echo no)"
   ck "tag 比 v26.3.27 新（旧 bug 会返回 v26.3.27）" "$newer" "yes"
   # 与实际最新对比
-  real="$(curl -fsSL --max-time 20 'https://api.github.com/repos/XTLS/Xray-core/releases?per_page=1' | jq -r '.[0].tag_name')"
-  ck "tag == 实际最新 release（${real}）" "$tag" "$real"
+  # ⚠️ 这条对照必须走 atom 兜底，不能用裸 curl 打 API：未认证配额 60 次/时，
+  #    配额耗尽时裸 curl 拿空 → 误报「回归」（2026-09-21 实测）。
+  #    atom 无配额，与 API 的 tag 序列实测一致。
+  real="$(_xray_tags_from_atom 2>/dev/null | sed -n 1p || true)"
+  if [[ -n "$real" ]]; then
+    ck "tag == 实际最新 release（${real}）" "$tag" "$real"
+  else
+    echo "    [SKIP] 无法取到对照版本（API 与 atom 均不可达）"
+  fi
 fi
 echo
 

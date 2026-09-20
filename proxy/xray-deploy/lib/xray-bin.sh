@@ -12,13 +12,53 @@
 #    上游 printf 收 SIGPIPE → 管道整体返回非 0 → pipefail 判失败 →
 #    `tags="$(recent_xray_tags)" || return 0` 静默提前返回，菜单一行都不打印
 #    （2026-09-21 实测踩到：菜单空白、版本选择形同虚设）。
-_xray_tags_all() {  # 全部 tag（新 → 旧）；失败 return 1
+
+# ---------- 通道 1：GitHub REST API（含 draft 元数据，可返回 30 条）----------
+_xray_tags_from_api() {
   local out
   # curl | jq：jq 读满全部输入，不会提前关管道（无 SIGPIPE 风险）
   out="$(curl -fsSL --max-time 20 "${GITHUB_API}" \
     | jq -r '.[] | select(.draft == false) | .tag_name')" || return 1
   [[ -n "$out" ]] || return 1
   printf '%s\n' "$out"
+}
+
+# ---------- 通道 2：releases.atom（无配额兜底）----------
+# ⚠️ 为什么必须有这个兜底（2026-09-21 用户真机报障）：
+#    未认证 GitHub API 配额仅 **60 次/时/IP**，超限返回 **HTTP 403**。
+#    原实现遇 403 直接 die「无法获取最新版本」→ 用户卡在安装向导第一步，
+#    且报错完全看不出是配额问题（403 与「仓库不存在/网络故障」同貌）。
+#    releases.atom 是公开 feed：**无配额、无需 token、无速率限制**。
+#    实测两者 tag 序列完全一致（仅条数 10 vs 30；本菜单本就只列 10 个）。
+#
+# ⚠️ 解析用 sed 而非 `grep -oP`：本工具支持 Alpine/busybox（**无 GNU grep -P**）。
+#    atom 每个 release 的 <id> 形如：
+#      <id>tag:github.com,2008:Repository/311315731/v26.9.9</id>
+#    取 id 末段即 tag —— 比解析 <title>（feed 自身也叫 "Release notes from ..."）稳。
+_xray_tags_from_atom() {
+  local out
+  out="$(curl -fsSL --max-time 20 "${XRAY_ATOM:-https://github.com/XTLS/Xray-core/releases.atom}" \
+    | sed -n 's|.*<id>tag:github\.com,[^<]*/\(v[0-9][0-9.]*\)</id>.*|\1|p')" || return 1
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+# 版本列表（新 → 旧）：先 API，失败回退 atom；两者都失败才 return 1
+# 注：调用方多在 $( ) 子进程里，故提示去重标志无法跨调用生效——极端情况下
+#     （API+atom 均失败且被调用两次）会打印两遍，属可接受的信息噪声。
+_XRAY_TAGS_WARNED=""
+_xray_tags_all() {
+  local out
+  if out="$(_xray_tags_from_api)"; then printf '%s\n' "$out"; return 0; fi
+  if [[ -z "${_XRAY_TAGS_WARNED}" ]]; then
+    log_warn "GitHub API 不可用（多为未认证配额 60 次/时耗尽 → HTTP 403）"
+    log_warn "  → 自动回退 releases.atom（无配额限制，无需 token）"
+    _XRAY_TAGS_WARNED=1
+  fi
+  if out="$(_xray_tags_from_atom)"; then printf '%s\n' "$out"; return 0; fi
+  log_err "版本列表获取失败：GitHub API 与 releases.atom 均不可达"
+  log_err "  （检查网络/代理；API 配额为 60 次/时，可等待重置或改用 atom）"
+  return 1
 }
 
 _xray_tag_at() {  # $1=N（1 起）；越界/失败 return 1
@@ -74,7 +114,7 @@ download_xray() {  # $1=tag；失败 return 1（由调用方决定回滚）
   fi
   chmod +x "${BIN_PATH}"
   rm -rf "$tmp"
-  log_info "Xray 已安装: ${BIN_PATH} ($("${BIN_PATH}" version | head -1))"
+  log_info "Xray 已安装: ${BIN_PATH} ($("${BIN_PATH}" version 2>/dev/null | sed -n 1p || true))"
 }
 
 # 版本选择菜单。stdout = 选中的 tag（空 = 无法选择，调用方回退最新版）。
@@ -90,7 +130,8 @@ prompt_xray_version() {
   #    同类写法（cmd-info.sh 的版本回退）已一并加固。
   cur=""
   if [[ -x "${BIN_PATH}" ]]; then
-    cur="$("${BIN_PATH}" version 2>/dev/null | head -1 | awk '{print $2}' || true)"
+    # 用 sed -n 1p 而非 `head -1`（SIGPIPE 竞态见文件头注释）
+    cur="$("${BIN_PATH}" version 2>/dev/null | sed -n 1p | awk '{print $2}' || true)"
   fi
   cur="v${cur#v}"
   [[ "$cur" == "v" ]] && cur=""

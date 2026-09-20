@@ -45,8 +45,18 @@ ck "GITHUB_API 已扩容 per_page=30" "$(grep -c '^GITHUB_API=.*per_page=30' "$M
 #    切片若写成 `... | head -N`，在 set -o pipefail 下 head 读够即关管道 →
 #    上游收 SIGPIPE → 管道返回非 0 → 调用方 `|| return 0` 静默早退 → 菜单空白。
 ck "切片不用 head -N 管道" \
-  "$(grep -cE '(_xray_tags_all|_xray_release_tags) \| head' "$LIB")" "0"
+  "$(grep -cE '(_xray_tags_all|_xray_release_tags|_xray_tags_from_atom|_xray_tags_from_api) \| head' "$LIB")" "0"
 ck "纯 bash 切片实现存在（while read ×2）" "$(grep -c 'while IFS= read -r line; do' "$LIB")" "2"
+
+# ⚠️ SIGPIPE 守卫（2026-09-21 本轮实测踩到）：`... | head -1` 在 set -o pipefail 下
+#    是否触发 SIGPIPE(141) 取决于输出大小与管道缓冲的竞态 —— 小输出常常侥幸通过，
+#    表现为「套件间歇性 rc=141、无汇总行」，极难复现。**一律用 sed -n Np 代替 head -N**。
+ck "库内无 version | head 用法" \
+  "$(grep -cE '"\$\{BIN_PATH\}" version.*\| head' "$LIB")" "0"
+# 说明：不检查本套件自身（断言行会自我匹配，用 awk 排除也命中——本仓库
+#       「注释污染断言计数」坑的又一例）。守生产代码即达到目的。
+ck "库内全部函数无 | head 用法" \
+  "$(grep -v '^[[:space:]]*#' "$LIB" | grep -c '| head')" "0"
 
 # 旧错误说法必须已修正（本轮实测证伪「sing-box 不受影响」）
 ck "usage.sh 不再称「sing-box 不受影响」" \
@@ -100,7 +110,7 @@ curl() { jq -R -s 'split("\n") | map(select(length>0)) | map({tag_name: ., draft
 ck "recent_xray_tags 100 → 全部 30 条" "$(recent_xray_tags 100 | wc -l)" "30"
 recent_xray_tags 10 >/dev/null; ck "recent_xray_tags 10 返回码 0（SIGPIPE 守卫）" "$?" "0"
 ck "recent_xray_tags 10 → 恰好 10 条" "$(recent_xray_tags 10 | wc -l)" "10"
-ck "recent_xray_tags 10 首条=最新" "$(recent_xray_tags 10 | head -1)" "v26.9.9"
+ck "recent_xray_tags 10 首条=最新" "$(recent_xray_tags 10 | sed -n 1p)" "v26.9.9"
 ck "recent_xray_tags 10 末条=第 10 个" "$(recent_xray_tags 10 | tail -1)" "v26.4.25"
 ck "latest_xray_tag = v26.9.9" "$(latest_xray_tag)" "v26.9.9"
 latest_xray_tag >/dev/null; ck "latest_xray_tag 返回码 0" "$?" "0"
@@ -156,9 +166,51 @@ echo
 # 配额受限（403）时 SKIP，避免假红；能连通时必须通过。
 echo "[D] 真实 GitHub API（配额受限则 SKIP）"
 unset -f curl   # 恢复真实 curl
+
+# ---------- C2. 403 配额兜底（2026-09-21 用户真机报障）----------
+# 未认证 GitHub API 配额 60 次/时，超限 403 → 原实现直接 die，安装向导第一步卡死。
+# 本组断言：API 失败必须回退 releases.atom，且两者都失败时报错非 0。
+# ⚠️ 本组必须在 `unset -f curl` 之后（否则用到的是上面 C 段的 mock curl，
+#    假 API 根本不会生效 → 断言恒过 = 假绿）。
+echo "[C2] 403 配额兜底（API 失败 → 回退 releases.atom）"
+ck "XRAY_ATOM 常量存在" \
+  "$([[ -n "$(grep -oP '^XRAY_ATOM="\K[^"]+' "$MAIN")" ]] && echo ok)" "ok"
+ck "atom 端点指向 releases.atom" \
+  "$(grep -oP '^XRAY_ATOM="\K[^"]+' "$MAIN" | grep -c 'releases\.atom')" "1"
+
+# 真实 API 最新版（供下面的对照断言用；配额受限时为空 → 跳过对照）
+live_latest="$(latest_xray_tag 2>/dev/null || true)"
+
+# 用「连不上的端口」等价模拟 API 失败（curl 会返回 7/22，走同一失败分支）
+_fake_api="http://127.0.0.1:9/nope"
+_rc_atom=0
+_out_atom="$(GITHUB_API="$_fake_api" recent_xray_tags 10 2>/dev/null)" || _rc_atom=$?
+ck "API 不可用 → 仍返回版本列表（rc=0）" "$_rc_atom" "0"
+ck "API 不可用 → 回退后拿到 10 条" "$(wc -l <<<"$_out_atom")" "10"
+ck "API 不可用 → 首条形如 v26.x" \
+  "$([[ "$(head -1 <<<"$_out_atom")" =~ ^v26\. ]] && echo ok)" "ok"
+
+# 兜底提示必须出现（不能被静默吞掉）
+_err_out="$(GITHUB_API="$_fake_api" recent_xray_tags 10 2>&1 >/dev/null || true)"
+ck "回退时打印 WARN（提示 releases.atom）" \
+  "$([[ "$(grep -c 'releases.atom' <<<"$_err_out")" -ge 1 ]] && echo ok)" "ok"
+
+# 两者都失败 → 明确报错 + 非 0（不能让调用方拿到空值继续跑）
+_rc_both=0
+XRAY_ATOM="http://127.0.0.1:9/nope" GITHUB_API="$_fake_api" recent_xray_tags 10 >/dev/null 2>&1 || _rc_both=$?
+ck "API+atom 均失败 → 返回非 0" "$_rc_both" "1"
+
+# 关键：atom 解析出的 tag 必须与 API 一致（防「回退到错版本」）
+if [[ -n "$live_latest" ]]; then
+  _atom_first="$(_xray_tags_from_atom 2>/dev/null | sed -n 1p)"
+  ck "atom 首条 == API 最新（${_atom_first} vs ${live_latest}）" "$_atom_first" "$live_latest"
+else
+  echo "  [SKIP] API 配额受限，跳过 atom/API 一致性对照"
+fi
+echo
+
 ck "GITHUB_API 用 releases 列表 per_page=30" \
   "$(grep -oP '^GITHUB_API=.*per_page=\K[0-9]+' "$MAIN")" "30"
-live_latest="$(latest_xray_tag 2>/dev/null || true)"
 if [[ -z "$live_latest" ]]; then
   echo "  [SKIP] GitHub API 不可达/配额受限（403）—— 联网且有余量时请重跑"
 elif [[ "$live_latest" =~ ^v26\. ]]; then
