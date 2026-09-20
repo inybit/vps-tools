@@ -8,7 +8,7 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.9.1` |
+| 版本 | `1.10.0` |
 | 结构 | 多文件（入口 + 26 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
@@ -31,7 +31,8 @@ xray-deploy info          # 查看节点信息与客户端片段
 
 ```bash
 xray-deploy                      交互式管理菜单
-sudo xray-deploy install         首次部署向导（选协议 → 参数 → 服务；默认 VLESS-TCP-XTLS-Vision-REALITY）
+sudo xray-deploy install         首次部署向导（选 Xray 版本 → 选协议 → 参数 → 服务；
+                                   版本默认最新，可选最近 10 个版本之一）
 xray-deploy info                 查看节点信息（明文 + 客户端配置片段，无需 root）
 xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 xray -test 校验并重载）
 xray-deploy fallback-test [域名]      测试回落域名握手延迟并排序（无参=全部候选）
@@ -44,6 +45,31 @@ xray-deploy chain show|setup|import|export|test|remove   中转 + 落地（链�
 xray-deploy -v, --version        显示版本号
 xray-deploy -h, --help           显示本帮助
 ```
+
+## Xray 版本选择（安装时）
+
+安装向导第一步会列出**最近 10 个 Xray 版本**，回车 = 最新版（默认行为与旧版一致）：
+
+```
+可选 Xray 版本（新 → 旧）:
+   1) v26.9.9 最新
+   2) v26.9.8
+   3) v26.7.28
+   ...
+  ⚠️ v26.9.8 起，REALITY 服务端要求客户端支持 X25519MLKEM768：
+     · mihomo 1.19.30+  → 可用（片段已含 support-x25519mlkem768: true）
+     · sing-box（含最新稳定版 1.14.1）→ ❌ 连不上，上游 issue #4520 未修
+     → 客户端用 sing-box 请选 v26.7.28 或更早
+选择版本 [1-10，回车默认 1（最新 v26.9.9）]:
+```
+
+- **为什么需要**：Xray `v26.9.8`（2026-09-08）起，REALITY 服务端要求客户端 ClientHello
+  携带 `X25519MLKEM768`，否则静默回落。mihomo 已适配，**sing-box 截至 1.14.1 未适配**。
+- **默认最新**：直接回车即可，不改变原有行为。
+- **`upgrade` 仍会升到最新**：需要长期停在旧版请手动 `xray-deploy config` 之外的方式管理，
+  或安装时选好版本后不要执行 `upgrade`。
+- **已装版本记录**在 `/etc/xray-deploy/state.json` 的 `xray_version` 字段，
+  `xray-deploy info` 会显示（≥ v26.9.8 时带 ⚠️ 提示）。
 
 ## 协议支持
 
@@ -129,10 +155,15 @@ xray-deploy chain mode                        查看当前模式（只读，无�
 
 ## 客户端兼容性硬约束
 
-- **mihomo 连 Xray ≥ 26.9.8 的 REALITY 必须显式 `support-x25519mlkem768: true`**：
-  mihomo 默认从 ClientHello 剥离 X25519MLKEM768，Xray 对不带该扩展的握手直接拒绝
-  （症状：`REALITY authentication failed`、服务端 `accepted=0`）。本工具生成的 mihomo 片段
-  已自动包含该字段，**勿手工删除**。sing-box 不受影响。
+- **Xray ≥ v26.9.8 的 REALITY 服务端要求客户端 ClientHello 携带 X25519MLKEM768**
+  （`XTLS/REALITY` 提交 `8cdf7bf9c7f0`，实测落在 v26.9.8）。客户端兼容矩阵：
+
+  | 客户端 | 结果 | 处置 |
+  |---|---|---|
+  | mihomo 1.19.30+ | ✅ 可用 | 需显式 `support-x25519mlkem768: true`（本工具生成的片段已含，**勿删**）。缺该字段症状：`REALITY authentication failed`、服务端 `accepted=0` |
+  | sing-box（含最新稳定版 1.14.1） | ❌ **连不上** | **无任何客户端侧开关可解**；上游 [SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520) 未修。症状 `reality verification failed`，服务端日志只有 `forwarded SNI:` 而无鉴权阶段 |
+
+  → **客户端用 sing-box 的，安装时请选 `v26.7.28` 或更早版本**（向导会提示）。
 - **sing-box 上游不支持 XHTTP**（需 extended / lx fork）；`vless-xhttp-reality` 只支持 mihomo 系。
 - `vless-xhttp` 的 mihomo 客户端需 v1.19.23+。
 

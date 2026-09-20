@@ -10,6 +10,20 @@ cmd_info() {
   echo " Xray 节点信息（$(state_get '.installed_at')）"
   echo "=============================================="
   echo "服务器 IP: ${ip}"
+  # 已装 Xray 版本（旧 state 无该字段 → 退回读二进制）
+  local xver
+  xver="$(state_get '.xray_version // ""')"
+  # ⚠️ `|| true` 必需：二进制缺失时命令替换内的管道失败 → set -e 静默杀脚本
+  if [[ -z "$xver" && -x "${BIN_PATH}" ]]; then
+    xver="$("${BIN_PATH}" version 2>/dev/null | head -1 | awk '{print $2}' || true)"
+  fi
+  if [[ -n "$xver" ]]; then
+    if xray_tag_needs_mlkem "$xver"; then
+      echo "Xray 版本: ${xver}  ⚠️ ≥ v${MLKEM_MIN_VERSION}（REALITY 要求客户端支持 X25519MLKEM768）"
+    else
+      echo "Xray 版本: ${xver}"
+    fi
+  fi
   echo
   local i name type port uuid pub sni sid domain path cert_file password brutal_up brutal_down
   for i in $(jq -r '.protocols | keys[]' "$STATE_FILE"); do
@@ -116,12 +130,16 @@ cmd_info() {
     fi
     echo "  分流模式: ${_m}（切换: xray-deploy chain mode <模式>）"
   fi
-  # 版本兼容警告：mihomo 连 Xray >= 26.9.8 的 REALITY 必须显式开 X25519MLKEM768
+  # 版本兼容警告：REALITY 客户端对 Xray >= 26.9.8 的兼容矩阵
   if jq -e '.protocols[] | select(.type=="vless-reality" or .type=="vless-xhttp-reality")' "$STATE_FILE" >/dev/null 2>&1; then
     echo "----------------------------------------------"
-    echo "⚠ mihomo 客户端：REALITY 节点必须带 support-x25519mlkem768: true"
-    echo "  （上面片段已含；Xray >= 26.9.8 对不带该扩展的握手直接拒绝，症状："
-    echo "   REALITY authentication failed / 服务端 accepted=0。sing-box 不受影响）"
+    echo "⚠ REALITY 客户端兼容性（Xray ≥ v${MLKEM_MIN_VERSION} 起服务端要求 X25519MLKEM768）"
+    echo "  · mihomo 1.19.30+ → 可用（上面片段已含 support-x25519mlkem768: true）"
+    echo "  · sing-box（含最新稳定版 1.14.1）→ ❌ 连不上，无客户端侧开关可解"
+    echo "    （上游 SagerNet/sing-box#4520 未修；症状 reality verification failed）"
+    if [[ -n "$xver" ]] && xray_tag_needs_mlkem "$xver"; then
+      echo "  → 当前服务端 ${xver} 会拒绝 sing-box；需 sing-box 请降到 v26.7.28 或更早"
+    fi
   fi
   echo "=============================================="
 }

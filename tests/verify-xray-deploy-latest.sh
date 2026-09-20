@@ -61,14 +61,21 @@ api="$(grep -oP '^api_url=\K.*' <<<"$out")"
 echo "    GITHUB_API = ${api}"
 echo "    解析出的 tag = ${tag}"
 ck "API 端点含 releases 列表" "$(grep -c 'releases?per_page=' <<<"$api")" "1"
-ck "tag 非空" "$([[ -n "$tag" ]] && echo yes)" "yes"
-ck "tag 形如 v<数字>" "$([[ "$tag" =~ ^v[0-9] ]] && echo yes)" "yes"
-# 关键：必须比 v26.3.27 新（旧 bug 恒返回它）
-newer="$([[ "$tag" =~ ^v26\.(9|[1-9][0-9]) ]] && echo yes || echo no)"
-ck "tag 比 v26.3.27 新（旧 bug 会返回 v26.3.27）" "$newer" "yes"
-# 与实际最新对比
-real="$(curl -fsSL --max-time 20 'https://api.github.com/repos/XTLS/Xray-core/releases?per_page=1' | jq -r '.[0].tag_name')"
-ck "tag == 实际最新 release（${real}）" "$tag" "$real"
+# ⚠️ 下面 3 条依赖真实 GitHub API。未认证时配额仅 60 次/时，
+#    被限流（403）会拿到空 tag → 会误报「回归」（2026-09-21 实测踩到）。
+#    配额受限时 SKIP，不污染全量回归结果。
+if [[ -z "$tag" ]]; then
+  echo "    [SKIP] GitHub API 不可达/配额受限（403）—— 联网且有余量时请重跑本套件"
+else
+  ck "tag 非空" "$([[ -n "$tag" ]] && echo yes)" "yes"
+  ck "tag 形如 v<数字>" "$([[ "$tag" =~ ^v[0-9] ]] && echo yes)" "yes"
+  # 关键：必须比 v26.3.27 新（旧 bug 恒返回它）
+  newer="$([[ "$tag" =~ ^v26\.(9|[1-9][0-9]) ]] && echo yes || echo no)"
+  ck "tag 比 v26.3.27 新（旧 bug 会返回 v26.3.27）" "$newer" "yes"
+  # 与实际最新对比
+  real="$(curl -fsSL --max-time 20 'https://api.github.com/repos/XTLS/Xray-core/releases?per_page=1' | jq -r '.[0].tag_name')"
+  ck "tag == 实际最新 release（${real}）" "$tag" "$real"
+fi
 echo
 
 # ---------- C. ver_gt 语义 ----------

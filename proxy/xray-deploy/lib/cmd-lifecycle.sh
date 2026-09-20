@@ -14,6 +14,10 @@ cmd_install() {
   update_geo
   state_init
   state_set --arg ip "$(detect_server_ip)" '.server_ip = $ip'
+  # 记录本次实际安装的 Xray 版本（info 展示 + 供排障对照）
+  local xver
+  xver="$("${BIN_PATH}" version 2>/dev/null | head -1 | awk '{print $2}')"
+  [[ -n "$xver" ]] && state_set --arg v "$xver" '.xray_version = $v'
 
   # 选择部署协议（回车默认 1 = VLESS-TCP-XTLS-Vision-REALITY）
   echo "可选部署协议:"
@@ -40,6 +44,11 @@ cmd_install() {
     *) die "未知协议类型: $type" ;;
   esac
   state_set --argjson p "$params" '.protocols = [$p]'
+  # 该协议是 REALITY 类 且 装的 Xray >= 分界版本 → 提示 sing-box 客户端不可用
+  case "$type" in
+    vless-reality|vless-xhttp-reality)
+      [[ -n "$xver" ]] && warn_mlkem_if_needed "v${xver}" ;;
+  esac
 
   # XHTTP3-NGINX 需要 unit 里的 RuntimeDirectory 预建 socket 目录（Xray 不自动建目录）
   if [[ "$type" == "vless-xhttp3-nginx" ]]; then
@@ -75,11 +84,14 @@ cmd_upgrade() {
     return 0
   fi
   log_info "升级 ${cur} → ${latest}"
+  warn_mlkem_if_needed "v${latest}"
   # 备份旧二进制，失败回滚
   cp "${BIN_PATH}" "${BIN_PATH}.bak"
   if download_xray "v${latest}"; then
     service_restart
     rm -f "${BIN_PATH}.bak"
+    # 同步记录已装版本（info 展示用）
+    [[ -f "$STATE_FILE" ]] && state_set --arg v "${latest}" '.xray_version = $v'
     log_info "升级完成: ${latest}"
   else
     mv "${BIN_PATH}.bak" "${BIN_PATH}"

@@ -9,7 +9,8 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
 
 用法:
   xray-deploy                      交互式管理菜单
-  sudo xray-deploy install         首次部署向导（选协议 → 参数 → 服务；默认 VLESS-TCP-XTLS-Vision-REALITY）
+  sudo xray-deploy install         首次部署向导（选 Xray 版本 → 选协议 → 参数 → 服务；
+                                   版本默认最新，可选最近 10 个版本之一）
   xray-deploy info                 查看节点信息（明文 + 客户端配置片段）
   xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 -test 校验并重载）
   xray-deploy fallback-test [域名] 测试回落域名握手延迟并排序（无参=全部候选）
@@ -74,8 +75,11 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   ⚠️ 新增 geosite 标签前须 curl 验证存在（MetaCubeX geo/geosite/<tag>.yaml）
 
 客户端兼容性:
-  mihomo 连 Xray >= 26.9.8 的 REALITY 必须显式 support-x25519mlkem768: true
-  （mihomo 默认剥离 X25519MLKEM768，Xray 对不带该扩展的握手直接拒绝；
-    症状 REALITY authentication failed / 服务端 accepted=0。sing-box 不受影响）
+  Xray >= v26.9.8 的 REALITY 服务端要求客户端 ClientHello 携带 X25519MLKEM768：
+  · mihomo 1.19.30+  → 可用（脚本生成的片段已含 support-x25519mlkem768: true，勿删）
+    症状（缺该字段时）：REALITY authentication failed / 服务端 accepted=0
+  · sing-box（含最新稳定版 1.14.1）→ ❌ 连不上，且无任何客户端侧开关可解
+    症状：reality verification failed（服务端日志只有 forwarded SNI，无鉴权阶段）
+    上游 SagerNet/sing-box#4520 未修 → 客户端用 sing-box 请安装时选 v26.7.28 或更早
 EOF
 }

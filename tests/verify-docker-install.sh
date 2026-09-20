@@ -291,7 +291,9 @@ chk "注册表 extra_files 含全部 $NLIBS 个 lib" \
 chk "注册表不再引用 templates" "! grep -q 'docker-install/templates' '$REPO/install.sh'"
 chk "注册表不再引用 render.sh" "! grep -q 'docker-install/lib/render.sh' '$REPO/install.sh'"
 chk "README 工具清单含 docker-install" "grep -q 'docker-install' '$REPO/README.md'"
-chk "installer 版本 ≥1.4.0" "grep -qE '^VPS_TOOLS_VERSION=\"1\.[4-9]' '$REPO/install.sh'"
+# ⚠️ 不能用 '1\.[4-9]' 单字符匹配次版本：1.10.0 会漏判（2026-09-21 踩到）。
+#    改为「次版本号 ≥4」的数值比较。
+chk "installer 版本 ≥1.4.0" "awk -F'\"' '/^VPS_TOOLS_VERSION=/{split(\$2,a,\".\"); exit !(a[1]>1 || (a[1]==1 && a[2]>=4))}' '$REPO/install.sh'"
 
 echo ""
 echo "=== [10b] 无死代码（重构后遗留的未调用函数/变量） ==="

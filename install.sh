@@ -30,7 +30,7 @@ set -euo pipefail
 #    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
 #    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
 #    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.9.0"
+VPS_TOOLS_VERSION="1.10.0"
 
 # ============ 配置 ============
 GH_USER="inybit"

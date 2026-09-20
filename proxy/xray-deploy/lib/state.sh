@@ -11,6 +11,7 @@ state_init() {  # 首次创建
   "schema_version": 1,
   "server_ip": "",
   "installed_at": "$(date -Is)",
+  "xray_version": "",
   "protocols": []
 }
 EOF
