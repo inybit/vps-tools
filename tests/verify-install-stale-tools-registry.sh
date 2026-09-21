@@ -28,6 +28,15 @@ PASS=0; FAIL=0
 ck(){ if [[ "$2" == "$3" ]]; then echo "  [PASS] $1"; PASS=$((PASS+1));
       else echo "  [FAIL] $1  期望=$3 实际=$2"; FAIL=$((FAIL+1)); fi; }
 
+# ⚠️ lib 文件数必须【从注册表动态推导】，不能硬编码（2026-09-21 修）：
+#    原先写死 26，xray-deploy 新增 lib/cmd-upgrade.sh 后未同步 → 断言假 FAIL
+#    （产品是对的，注册表 27 项与磁盘 27 个 lib 完全一致）。
+#    这类「上游加文件、下游硬编码计数」的断言每次都要人记得改两处，必然漂移。
+#    改为扫 install.sh 里 xray-deploy 那行的 extra_files 字段（第 6 字段）。
+XLIB_N="$(grep -oP '^  "xray-deploy\|[^"]*"' "$SRC" | tr -d '"' \
+          | awk -F'|' '{print $6}' | tr ' ' '\n' \
+          | grep -c 'proxy/xray-deploy/lib/.*\.sh')"
+
 # ---------- mock curl：从「远端目录」按 URL 路径取文件 ----------
 cat > "$MOCK/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -127,7 +136,7 @@ printf '2\n%s\n0\n' "$(grep -n 'xray-deploy' "$T/o1" | head -1 >/dev/null; echo 
 "$T/usr/local/bin/vps-tools" update xray-deploy > "$T/o2" 2>&1 || true
 LIBD="$T/root/xray-deploy/lib"
 ck "主脚本已装" "$([[ -f "$T/root/xray-deploy/xray-deploy.sh" ]] && echo yes || echo no)" "yes"
-ck "lib 文件已装（新清单 26 个）" "$(ls "$LIBD" 2>/dev/null | wc -l)" "26"
+ck "lib 文件已装（新清单 $XLIB_N 个）" "$(ls "$LIBD" 2>/dev/null | wc -l)" "$XLIB_N"
 ck "xhttp3.sh 已装上（修复生效）" "$([[ -f "$LIBD/xhttp3.sh" ]] && echo present || echo missing)" "present"
 ck "入口 source 了它 → 必然启动即崩" "$(grep -c 'LIB_DIR}/xhttp3.sh' "$T/root/xray-deploy/xray-deploy.sh")" "1"
 # 实测崩
@@ -156,7 +165,7 @@ rm -rf "$T/root/xray-deploy"
 echo "  --- o4 输出 ---"; sed 's/^/    /' "$T/o4" | head -8
 echo "  --- curl 调用 ---"; sed 's/^/    /' "$LOG" | head -5
 ck "新副本安装含 xhttp3.sh" "$([[ -f "$LIBD/xhttp3.sh" ]] && echo present || echo missing)" "present"
-ck "文件数 = 26" "$(ls "$LIBD" | wc -l)" "26"
+ck "文件数 = $XLIB_N" "$(ls "$LIBD" | wc -l)" "$XLIB_N"
 ck "可正常启动" "$(bash "$T/root/xray-deploy/xray-deploy.sh" -v 2>&1 | grep -c '^xray-deploy ')" "1"
 
 echo

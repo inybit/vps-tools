@@ -21,7 +21,17 @@ mkdir -p "$MOCK_BIN" "$MOCK_STATE" "$TMP/ufw" "$TMP/droot" "$TMP/srv"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); echo "  [PASS] $1"; }
 bad(){ FAIL=$((FAIL+1)); echo "  [FAIL] $1  <<< $2"; }
-chk(){ if eval "$2"; then ok "$1"; else bad "$1" "$2"; fi; }
+# ⚠️ 断言体一律在【关掉 pipefail】的子 shell 里求值（2026-09-21 实测根因）。
+#    harness 顶部有 `set -o pipefail`，而断言普遍形如
+#        echo "$OUT" | grep -q '关键词'
+#    bash 内建 echo 对【多行】输入会在 shell 进程内分多次 write()；grep -q
+#    命中后立即退出并关闭读端 → echo 后续 write 返回 EPIPE/SIGPIPE(141)
+#    → pipefail 把整条管道判为失败 → 断言假红。
+#    实测（4000 次多行输入）：原样 7 次失败；单行输入 0 次失败（单次 write 写完
+#    grep 才退出）——正是「失败看起来随机、且只落在多行输出断言上」的来源。
+#    修法：只在本函数内 set +o pipefail，断言语义与判据完全不变。
+chk(){ local _rc; set +o pipefail; eval "$2"; _rc=$?; \
+       if [[ $_rc -eq 0 ]]; then ok "$1"; else bad "$1" "$2"; fi; }
 
 # ---------- 环境隔离 ----------
 export DI_UFW_AFTER="$TMP/ufw/after.rules"
@@ -355,8 +365,13 @@ chk "无 TTY：说明根因"        "grep -q '无交互终端' <<<$(printf '%q' 
 chk "无 TTY：给出 user 子命令" "grep -q 'user <用户名>' <<<$(printf '%q' "$NOTTY_OUT")"
 chk "无 TTY：给出 DI_DOCKER_USER 替代" "grep -q 'DI_DOCKER_USER' <<<$(printf '%q' "$NOTTY_OUT")"
 chk "无 TTY：不再有泛泛文案「未指定用户，跳过」" "! grep -q '未指定用户，跳过' <<<$(printf '%q' "$NOTTY_OUT")"
-bash "$TMP/rt-notty.sh" >/dev/null 2>&1
-chk "无 TTY：返回非零（调用方可判定）" "[[ \$? -ne 0 ]]"
+# ⚠️ $? 必须在 chk() 之外捕获（2026-09-21 实测）：
+#    写成 chk "..." "[[ \$? -ne 0 ]]" 是错的 —— eval 求值时 $? 读到的是
+#    chk 内部上一条命令（如 local _rc）的状态，与 rt-notty.sh 的退出码无关。
+#    该断言此前长期「偶尔通过」只是被 pipefail/SIGPIPE 假红掩盖（修掉假红后
+#    它 19/60 稳定失败才暴露）。正确姿势：先 rc=$?，再断言 rc。
+bash "$TMP/rt-notty.sh" >/dev/null 2>&1; NOTTY_RC=$?
+chk "无 TTY：返回非零（调用方可判定）" "[[ ${NOTTY_RC:-0} -ne 0 ]]"
 
 # ---- 12b) 向导调用点不得吞 stderr（吞了 = 上面的诊断全看不见） ----
 chk "向导调用 resolve_target_user 未重定向 stderr" \
