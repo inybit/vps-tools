@@ -16,7 +16,9 @@ cmd_install() {
   state_set --arg ip "$(detect_server_ip)" '.server_ip = $ip'
   # 记录本次实际安装的 Xray 版本（info 展示 + 供排障对照）
   local xver
-  xver="$("${BIN_PATH}" version 2>/dev/null | head -1 | awk '{print $2}')"
+  # ⚠️ sed -n 1p 而非 `| head -1`：head 读够即关管道 → 上游收 SIGPIPE(141) →
+  #    在 set -o pipefail 下整条管道返回非 0（间歇性，取决于输出量与缓冲的竞态）
+  xver="$("${BIN_PATH}" version 2>/dev/null | sed -n 1p | awk '{print $2}' || true)"
   [[ -n "$xver" ]] && state_set --arg v "$xver" '.xray_version = $v'
 
   # 选择部署协议（回车默认 1 = VLESS-TCP-XTLS-Vision-REALITY）
@@ -60,43 +62,6 @@ cmd_install() {
   service_start
   log_info "安装完成！运行 'xray-deploy.sh info' 查看节点信息"
   log_info "geo 数据更新: 运行 'xray-deploy update-geo'（手动，或自行配 systemd timer）"
-}
-
-# ============ 升级 ============
-cmd_upgrade() {
-  need_root
-  [[ -x "$BIN_PATH" ]] || die "Xray 未安装，先运行 install"
-  local cur latest
-  cur="$("${BIN_PATH}" version | head -1 | awk '{print $2}')"
-  latest="$(latest_xray_tag)" || die "无法获取最新版本"
-  [[ -n "$latest" ]] || die "无法解析最新版本号（GitHub API 返回异常）"
-  # xray version 输出无 v 前缀，tag 带 v 前缀
-  cur="${cur#v}"; latest="${latest#v}"
-  if [[ "$cur" == "$latest" ]]; then
-    log_info "已是最新版本 ${cur}"; return 0
-  fi
-  # ⚠️ 必须做语义化比较，不能用「不相等就升级」：
-  #    已装版本比远端新时（远端 API 异常/回退、或手动装了更新的版本）
-  #    字符串比较会判定「需要升级」并执行【降级】，把新二进制换回旧版。
-  if ver_gt "$cur" "$latest"; then
-    log_warn "本地 ${cur} 比远端最新 ${latest} 更新，跳过（避免降级）"
-    log_warn "  如需强制降级：手动下载 ${latest} 替换 ${BIN_PATH}"
-    return 0
-  fi
-  log_info "升级 ${cur} → ${latest}"
-  warn_mlkem_if_needed "v${latest}"
-  # 备份旧二进制，失败回滚
-  cp "${BIN_PATH}" "${BIN_PATH}.bak"
-  if download_xray "v${latest}"; then
-    service_restart
-    rm -f "${BIN_PATH}.bak"
-    # 同步记录已装版本（info 展示用）
-    [[ -f "$STATE_FILE" ]] && state_set --arg v "${latest}" '.xray_version = $v'
-    log_info "升级完成: ${latest}"
-  else
-    mv "${BIN_PATH}.bak" "${BIN_PATH}"
-    die "升级失败，已回滚到 ${cur}"
-  fi
 }
 
 # ============ 卸载 ============

@@ -33,10 +33,10 @@ ck "定义 recent_xray_tags" "$(grep -c '^recent_xray_tags()' "$LIB")" "1"
 ck "定义 prompt_xray_version" "$(grep -c '^prompt_xray_version()' "$LIB")" "1"
 ck "定义 warn_mlkem_if_needed" "$(grep -c '^warn_mlkem_if_needed()' "$LIB")" "1"
 ck "install_xray 调用版本选择（定义+调用=2）" "$(grep -c 'prompt_xray_version' "$LIB")" "2"
-ck "cmd_upgrade 调用 warn_mlkem_if_needed（定义调用=2）" \
-  "$(grep -c 'warn_mlkem_if_needed' "${TOOL_DIR}/lib/cmd-lifecycle.sh")" "2"
+ck "cmd_upgrade 调用 warn_mlkem_if_needed（cmd-upgrade.sh）" \
+  "$(grep -c 'warn_mlkem_if_needed' "${TOOL_DIR}/lib/cmd-upgrade.sh")" "1"
 ck "cmd_install 调用 warn_mlkem_if_needed" \
-  "$(grep -c 'warn_mlkem_if_needed' "${TOOL_DIR}/lib/cmd-lifecycle.sh")" "2"
+  "$(grep -c 'warn_mlkem_if_needed' "${TOOL_DIR}/lib/cmd-lifecycle.sh")" "1"
 ck "state_init 含 xray_version 字段" \
   "$(grep -c '"xray_version"' "${TOOL_DIR}/lib/state.sh")" "1"
 ck "GITHUB_API 已扩容 per_page=30" "$(grep -c '^GITHUB_API=.*per_page=30' "$MAIN")" "1"
@@ -52,7 +52,13 @@ ck "纯 bash 切片实现存在（while read ×2）" "$(grep -c 'while IFS= read
 #    是否触发 SIGPIPE(141) 取决于输出大小与管道缓冲的竞态 —— 小输出常常侥幸通过，
 #    表现为「套件间歇性 rc=141、无汇总行」，极难复现。**一律用 sed -n Np 代替 head -N**。
 ck "库内无 version | head 用法" \
-  "$(grep -cE '"\$\{BIN_PATH\}" version.*\| head' "$LIB")" "0"
+  "$(grep -cE '"\$\\{BIN_PATH\\}" version.*\| head' "$LIB")" "0"
+# 全仓库守卫（2026-09-21 补）：原守卫只扫 xray-bin.sh，而 cmd-lifecycle.sh /
+#   cmd-info.sh 里同样的 `version | head -1` 形态长期漏网（纪律形同虚设）。
+#   只匹配 `version ... | head`，不匹配 jq/openssl 的 `| head`（那些不是 SIGPIPE 高危形态，
+#   且 openssl 的 `head -c` 是有意为之）—— 避免假红。
+ck "全仓库无 version | head 用法" \
+  "$(grep -rcE 'version[^|]*\| head' "${TOOL_DIR}/lib/"*.sh | grep -v ':0$' | wc -l)" "0"
 # 说明：不检查本套件自身（断言行会自我匹配，用 awk 排除也命中——本仓库
 #       「注释污染断言计数」坑的又一例）。守生产代码即达到目的。
 ck "库内全部函数无 | head 用法" \

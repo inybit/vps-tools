@@ -73,6 +73,17 @@ _xray_tag_at() {  # $1=N（1 起）；越界/失败 return 1
 
 latest_xray_tag() { _xray_tag_at 1; }
 
+# 归一化用户输入的版本号 → 带 v 前缀的规范 tag（stdout）；格式非法 return 1。
+# 供 cmd_upgrade 的「显式指定版本」路径使用（回退/切换内核版本）。
+# 只做格式与字符白名单校验（防路径注入：tag 会拼进下载 URL），
+# 「这个 tag 是否真实存在」由 cmd_upgrade 比对发布列表完成。
+normalize_xray_tag() {  # $1=tag（可带或不带 v）
+  local t="${1:-}"
+  t="${t#v}"
+  [[ "$t" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf 'v%s\n' "$t"
+}
+
 # 最近 N 个版本（安装向导 / 版本选择菜单用）
 recent_xray_tags() {  # $1=N（默认 10）
   local n="${1:-10}" all i=0 line
@@ -110,6 +121,11 @@ download_xray() {  # $1=tag；失败 return 1（由调用方决定回滚）
     rm -rf "$tmp"; log_err "Xray 下载失败: ${url}"; return 1
   fi
   if ! unzip -o -j "${tmp}/xray.zip" "xray" -d "${INSTALL_DIR}" >/dev/null; then
+    # ⚠️ 区分「工具缺失」与「包损坏」：前者报「zip 损坏」会把排障引向错误方向
+    #    （2026-09-21 实测：本机无 unzip 时报出「解压失败（zip 损坏?）」）。
+    if ! command -v unzip >/dev/null 2>&1; then
+      rm -rf "$tmp"; log_err "解压失败：未安装 unzip（依赖缺失，非包损坏）"; return 1
+    fi
     rm -rf "$tmp"; log_err "解压失败（zip 损坏?）"; return 1
   fi
   chmod +x "${BIN_PATH}"

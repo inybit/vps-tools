@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.1"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.11.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,6 +68,7 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 . "${LIB_DIR}/proto-crud.sh"
 . "${LIB_DIR}/proto-edit.sh"
 . "${LIB_DIR}/cmd-lifecycle.sh"
+. "${LIB_DIR}/cmd-upgrade.sh"
 . "${LIB_DIR}/cmd-info.sh"
 . "${LIB_DIR}/cmd-fallback.sh"
 . "${LIB_DIR}/globalping.sh"
@@ -85,7 +86,7 @@ case "$CMD" in
   fallback-test) cmd_fallback_test "${2:-}" ;;
   fallback-cn-test) cmd_fallback_cn_test "${2:-}" ;;
   update-geo)    update_geo "${2:-}" ;;
-  upgrade)       cmd_upgrade ;;
+  upgrade)       cmd_upgrade "${2:-}" ;;
   status)        need_root; service_status ;;
   restart)       need_root; service_restart ;;
   uninstall)     cmd_uninstall ;;
@@ -124,7 +125,7 @@ if [[ "$CMD" == "menu" ]]; then
     echo "  3) 查看节点信息 (info)"
     echo "  4) 回落域名测试 (fallback-test)"
     echo "  5) 更新 geo 数据 (geosite/geoip)"
-    echo "  6) 升级 Xray 版本"
+    echo "  6) 升级 Xray 版本（带版本号=回退，如: xray-deploy upgrade v26.7.28）"
     echo "  7) 查看/编辑配置 (config)"
     echo "  8) 服务状态"
     echo "  9) 重启服务"

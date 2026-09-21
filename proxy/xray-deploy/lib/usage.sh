@@ -18,7 +18,9 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
                                    需要外网访问 api.globalping.io；只读检测，不改部署状态
                                    **提交前需确认数据出境**（默认拒绝；自动化用 CN_TEST_ASSUME_YES=1）
   sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
-  sudo xray-deploy upgrade         升级 Xray 二进制（失败自动回滚）
+  sudo xray-deploy upgrade [版本]   不带参数=升级到最新（失败自动回滚，含防降级）；
+                                   带版本=切换/回退到指定内核版本，允许降级
+                                   例: sudo xray-deploy upgrade v26.7.28
   sudo xray-deploy status|restart|uninstall
   sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / vless-xhttp3-nginx / hysteria2 / ss2022）
   xray-deploy chain show|setup|import|export|test|remove

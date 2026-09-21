@@ -8,7 +8,7 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.10.1` |
+| 版本 | `1.11.0` |
 | 结构 | 多文件（入口 + 26 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
@@ -38,7 +38,9 @@ xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 x
 xray-deploy fallback-test [域名]      测试回落域名握手延迟并排序（无参=全部候选）
 xray-deploy fallback-cn-test [域名]   回落域名中国方向可达性检测（Globalping 探针）
 sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
-sudo xray-deploy upgrade         升级 Xray 二进制（失败自动回滚）
+sudo xray-deploy upgrade [版本]  不带参数=升级到最新（失败自动回滚，含防降级）；
+                                   带版本=切换/回退到指定内核版本（允许降级）
+                                   例: sudo xray-deploy upgrade v26.7.28
 sudo xray-deploy status|restart|uninstall
 sudo xray-deploy protocol add|remove|edit|list   多协议管理
 xray-deploy chain show|setup|import|export|test|remove   中转 + 落地（链式代理）管理
@@ -66,10 +68,26 @@ xray-deploy -h, --help           显示本帮助
 - **为什么需要**：Xray `v26.9.8`（2026-09-08）起，REALITY 服务端要求客户端 ClientHello
   携带 `X25519MLKEM768`，否则静默回落。mihomo 已适配，**sing-box 截至 1.14.1 未适配**。
 - **默认最新**：直接回车即可，不改变原有行为。
-- **`upgrade` 仍会升到最新**：需要长期停在旧版请手动 `xray-deploy config` 之外的方式管理，
-  或安装时选好版本后不要执行 `upgrade`。
 - **已装版本记录**在 `/etc/xray-deploy/state.json` 的 `xray_version` 字段，
   `xray-deploy info` 会显示（≥ v26.9.8 时带 ⚠️ 提示）。
+
+## Xray 版本回退 / 切换（安装后）
+
+装好之后想换内核版本，用 `upgrade` 的**显式版本参数**（2026-09-21 新增）：
+
+```bash
+sudo xray-deploy upgrade v26.7.28   # 切换到指定版本（允许降级）
+sudo xray-deploy upgrade            # 不带参数 = 升到最新（原行为，含防降级）
+```
+
+- **两条路径语义不同，别混**：不带参数 = 「升级」，本地比远端新时仍会**跳过并告警**（防降级）；
+  带参数 = 「切换/回退」，**不做防降级判断**——降级正是它的用途。
+- **防打错字**：显式指定的版本必须在 GitHub 发布列表里，否则**拒绝下载**（避免手滑装了个
+  不存在的 tag）；发布列表拿不到（离线/配额）时降级为提示，不阻断。
+- **安全网照旧**：切换前备份旧二进制到 `xray.bak`，下载失败自动回滚；成功后同步
+  `state.json.xray_version`，并按目标版本触发 MLKEM 客户端兼容告警。
+- **典型场景**：客户端用 sing-box → 被 `upgrade` 拽到 ≥ v26.9.8 后客户端静默连不上，
+  用 `sudo xray-deploy upgrade v26.7.28` 退回即可。
 
 ## 协议支持
 
@@ -212,13 +230,13 @@ xray-deploy chain mode                        查看当前模式（只读，无�
 ```
 proxy/xray-deploy/
 ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-└── lib/                    # 26 模块
+└── lib/                    # 27 模块
     ├── common.sh service.sh state.sh xray-bin.sh keys.sh registry.sh
     ├── fallback-data.sh fallback.sh globalping.sh
     ├── inbound.sh outbound.sh routing.sh chain.sh chain-info.sh ss2022.sh
     ├── proto-wizard.sh xhttp3.sh proto-crud.sh proto-edit.sh
     ├── client-mihomo.sh client-singbox.sh client-ss2022.sh
-    └── cmd-lifecycle.sh cmd-info.sh cmd-fallback.sh usage.sh
+    └── cmd-lifecycle.sh cmd-upgrade.sh cmd-info.sh cmd-fallback.sh usage.sh
 ```
 
 ## 回归测试
@@ -232,7 +250,7 @@ bash tests/run-all.sh xray      # 全部 xray 相关套件
 | `verify-xray-deploy-routing.sh` | 分流规则（56 断言，含 geosite 标签实测） |
 | `verify-xray-deploy-xhttp3-nginx.sh` | vless-xhttp3-nginx（67 断言：触点/nginx 门/冲突/unit/info，含真实 xray -test） |
 | `verify-xray-deploy-chain.sh` | 链式代理（46 断言） |
-| `verify-xray-deploy-latest.sh` | 版本查询 / 升级防降级 |
+| `verify-xray-deploy-latest.sh` | 版本查询 / 升级防降级 / 显式版本回退（58 断言） |
 | `verify-xray-deploy-behavior.sh` | 行为契约 |
 | `verify-xray-deploy-e2e.sh` | 端到端（需真实环境） |
 | `verify-xray-deploy-mode-e2e.sh` | 分流模式端到端（真实 xray 决策日志） |

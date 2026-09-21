@@ -30,7 +30,7 @@ set -euo pipefail
 #    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
 #    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
 #    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.10.1"
+VPS_TOOLS_VERSION="1.11.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -71,7 +71,7 @@ VPS_TOOLS_CMD="${CMD_DIR}/vps-tools"     # 管理命令入口
 #   bench/     测试类（测速/基准）
 TOOLS=(
   "vnstat-monitor|monitor/vnstat-monitor/vnstat-monitor.sh|monitor/vnstat-monitor/vnstat-monitor.env.example|${CONFIG_DIR}/vnstat-monitor.env|setup|"
-  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/xhttp3.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/usage.sh"
+  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/xhttp3.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-upgrade.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/usage.sh"
   "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env||utils/vps-init/lib/common.sh utils/vps-init/lib/sshkey.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl"
   "vps-bench|bench/vps-bench/vps-bench.sh|||nodequality|"
   "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env||utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh"

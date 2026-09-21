@@ -15,7 +15,7 @@ cmd_info() {
   xver="$(state_get '.xray_version // ""')"
   # ⚠️ `|| true` 必需：二进制缺失时命令替换内的管道失败 → set -e 静默杀脚本
   if [[ -z "$xver" && -x "${BIN_PATH}" ]]; then
-    xver="$("${BIN_PATH}" version 2>/dev/null | head -1 | awk '{print $2}' || true)"
+    xver="$("${BIN_PATH}" version 2>/dev/null | sed -n 1p | awk '{print $2}' || true)"
   fi
   if [[ -n "$xver" ]]; then
     if xray_tag_needs_mlkem "$xver"; then
