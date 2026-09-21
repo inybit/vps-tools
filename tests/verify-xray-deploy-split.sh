@@ -24,6 +24,33 @@ CUR="/tmp/xray-deploy-fn-current.txt"
 MODE="${1:-}"
 BASELINE_SRC="${2:-}"
 
+# ⚠️ 白名单的【单一权威源】= tests/lib/xray-deploy-allow.txt（2026-09-21 改）
+#    原先白名单只存在于 verify-xray-deploy-all.sh；run-all.sh 裸跑本套件时不传变量
+#    → 45 个已声明新增的函数全被判「未预期新增」→ 本套件在 canonical 入口下
+#    【必然 FAIL】→ run-all.sh 恒退非零 → 「非零 = 有回归」这个信号彻底失效
+#    （真回归会被淹没在既存红里）。
+#    现在：① 无环境变量时自动从该文件读（canonical 入口直接跑就对）；
+#          ② 仍允许 ALLOW_NEW_FNS / ALLOW_CHANGED_FNS 覆盖（临时实验用）。
+#
+# ⚠️ 不要写成 `: "${VAR:=$(awk '...&&...')}"`：awk 程序里的 `&&` 要穿过外层
+#    双引号 + 单引号两层，极易被转义成 `\&\&` → awk 报 "backslash not last
+#    character on line" → 变量静默为空 → 套件照旧 FAIL（本次踩过一轮）。
+#    正解：把提取逻辑放进【独立函数】，函数体内用单引号写 awk，调用处只取输出。
+ALLOW_FILE="${REPO}/tests/lib/xray-deploy-allow.txt"
+allow_new_from_file() {
+  awk '/^# === ALLOW_NEW/{f=1;next}
+       /^# === ALLOW_CHANGED/{f=0}
+       f && !/^#/ && NF {print}' "$ALLOW_FILE" | tr '\n' ' '
+}
+allow_changed_from_file() {
+  awk '/^--- CHANGED ---/{f=1;next}
+       f && !/^#/ && NF {print}' "$ALLOW_FILE" | tr '\n' ' '
+}
+if [[ -f "$ALLOW_FILE" ]]; then
+  [[ -n "${ALLOW_NEW_FNS:-}" ]]     || ALLOW_NEW_FNS="$(allow_new_from_file)"
+  [[ -n "${ALLOW_CHANGED_FNS:-}" ]] || ALLOW_CHANGED_FNS="$(allow_changed_from_file)"
+fi
+
 # 截掉子命令分发段（从分发注释到文件尾），否则 source 会真的执行命令
 strip_dispatch() {
   sed '/^# ============ 子命令分发 ============/,$d' "$1"

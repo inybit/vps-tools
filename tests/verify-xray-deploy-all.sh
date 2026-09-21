@@ -34,13 +34,22 @@ run() {  # $1=名称 $2=脚本 $3...=环境变量
   echo
 }
 
-# ⚠️ build_routing_rules_json 在【拆分前基线】里不存在（阶段 3 新增）→ 必须放 ALLOW_NEW。
-#    放 ALLOW_CHANGED 会被判定为"未预期新增"而 FAIL（本次踩过）。
-ALLOW_NEW="ver_gt gen_ss2022_key select_ss2022_method proto_wizard_ss2022 validate_ss2022_key gen_client_mihomo_ss2022 gen_client_singbox_ss2022 gen_outbound_ss2022 gen_landing_outbound gen_outbound_vless_reality chain_export chain_validate_upstream chain_set_upstream chain_import chain_setup chain_remove chain_show chain_test build_outbounds_json build_routing_rules_json routing_preset_domains routing_preset_list routing_current_mode chain_mode_show chain_mode require_nginx xhttp3_socket_path xhttp3_check_socket_conflict xhttp3_check_port_conflict xhttp3_ensure_service_unit proto_wizard_vless_xhttp3_nginx gen_client_mihomo_vless_xhttp3_nginx gen_client_singbox_vless_xhttp3_nginx xhttp3_print_nginx_reference _xray_tags_all _xray_tag_at recent_xray_tags xray_tag_needs_mlkem prompt_xray_version warn_mlkem_if_needed _xray_tags_from_api _xray_tags_from_atom normalize_xray_tag"
-ALLOW_CHANGED="latest_xray_tag cmd_upgrade build_config proto_add proto_list_names cmd_install cmd_info gen_client_mihomo gen_client_singbox protocol_to_inbound proto_edit install_service_file state_init install_xray download_xray"
+# ⚠️ 白名单的【单一权威源】= tests/lib/xray-deploy-allow.txt（2026-09-21 改）
+#    原先只在 verify-xray-deploy-all.sh 里维护一份，而 run-all.sh 裸跑 split 套件
+#    不传这两个变量 → 45 个已声明新增的函数全被判「未预期新增」→ 该套件在
+#    canonical 入口下【必然 FAIL】→ run-all.sh 恒退非零 →
+#    「非零 = 有回归」这个信号彻底失效（真回归会被淹没在既存红里）。
+#    现在两个入口都从同一文件读，不再各维护一份。
+ALLOW_FILE="${REPO}/tests/lib/xray-deploy-allow.txt"
+_allowed_new() {
+  awk '/^# === ALLOW_NEW/{f=1;next} /^# === ALLOW_CHANGED/{f=0} f && !/^#/ && NF {print}' "$ALLOW_FILE" | tr '\n' ' '
+}
+_allowed_changed() {
+  awk '/^--- CHANGED ---/{f=1;next} f && !/^#/ && NF {print}' "$ALLOW_FILE" | tr '\n' ' '
+}
 
 run "拆分等价性（73 原函数体逐字相同）" tests/verify-xray-deploy-split.sh \
-    ALLOW_NEW_FNS="$ALLOW_NEW" ALLOW_CHANGED_FNS="$ALLOW_CHANGED"
+    ALLOW_NEW_FNS="$(_allowed_new)" ALLOW_CHANGED_FNS="$(_allowed_changed)"
 run "行为等价（入口/错误路径/真实函数）" tests/verify-xray-deploy-behavior.sh
 run "latest 修复 + 防降级" tests/verify-xray-deploy-latest.sh
 run "ss2022 + chain 配置生成（含真实 xray -test）" tests/verify-xray-deploy-chain.sh

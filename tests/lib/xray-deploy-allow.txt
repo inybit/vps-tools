@@ -1,0 +1,82 @@
+# xray-deploy 拆分等价性套件的函数白名单（单一权威源）
+#
+# 用途：tests/verify-xray-deploy-split.sh 靠「函数名集合 + 函数体逐字 diff」
+#       守「其余函数体零改动」这个强保证。因此：
+#         - 任何【新增函数】必须进 ALLOW_NEW，否则判「未预期新增」FAIL
+#         - 任何【函数体被改动】必须进 ALLOW_CHANGED
+#
+# ⚠️ 为什么抽成独立文件（2026-09-21）：
+#    原先白名单只在 tests/verify-xray-deploy-all.sh 里维护一份，而 run-all.sh
+#    直接裸跑 split 套件、不传环境变量 → 41 个已声明新增的函数全被判「未预期
+#    新增」→ 该套件在 canonical 入口下【必然 FAIL】。
+#    后果不只是「多一条红」：run-all.sh 永远退非零 → 「非零 = 有回归」这个信号
+#    彻底失效（真回归会被淹没在既存红里）。
+#    现在两个入口都读本文件，不再各维护一份、不再漂移。
+#
+# 格式：每行一个函数名，# 开头为注释，空行忽略。
+#       两个字段不能混（放错会被判「未预期」或漏判）。
+#
+# === ALLOW_NEW：相对【拆分前基线】新增的函数 ===
+ver_gt
+gen_ss2022_key
+select_ss2022_method
+proto_wizard_ss2022
+validate_ss2022_key
+gen_client_mihomo_ss2022
+gen_client_singbox_ss2022
+gen_outbound_ss2022
+gen_landing_outbound
+gen_outbound_vless_reality
+chain_export
+chain_validate_upstream
+chain_set_upstream
+chain_import
+chain_setup
+chain_remove
+chain_show
+chain_test
+build_outbounds_json
+build_routing_rules_json
+routing_preset_domains
+routing_preset_list
+routing_current_mode
+chain_mode_show
+chain_mode
+require_nginx
+xhttp3_socket_path
+xhttp3_check_socket_conflict
+xhttp3_check_port_conflict
+xhttp3_ensure_service_unit
+proto_wizard_vless_xhttp3_nginx
+gen_client_mihomo_vless_xhttp3_nginx
+gen_client_singbox_vless_xhttp3_nginx
+xhttp3_print_nginx_reference
+_xray_tags_all
+_xray_tag_at
+recent_xray_tags
+xray_tag_needs_mlkem
+prompt_xray_version
+warn_mlkem_if_needed
+_xray_tags_from_api
+_xray_tags_from_atom
+normalize_xray_tag
+cmd_upgrade_versioned
+warn_version_rollback
+
+# === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
+--- CHANGED ---
+latest_xray_tag
+cmd_upgrade
+build_config
+proto_add
+proto_list_names
+cmd_install
+cmd_info
+gen_client_mihomo
+gen_client_singbox
+protocol_to_inbound
+proto_edit
+install_service_file
+state_init
+install_xray
+download_xray
