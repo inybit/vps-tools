@@ -24,6 +24,29 @@ TRACKED_PIDS=()
 cleanup() { for p in "${TRACKED_PIDS[@]:-}"; do [[ -n "$p" ]] && kill "$p" 2>/dev/null; done; rm -rf "$TMP"; }
 trap cleanup EXIT
 
+# ⚠️ 跑前必须清场（2026-09-21 实测根因，勿删）：
+#    本套件用固定端口（28701-28704）。若上一次运行被杀（Ctrl-C / 超时 / 调试中断）
+#    导致进程残留，**下一次运行会静默假红**：
+#      web 端口被占 → `python3 -m http.server` bind 失败（OSError: Address already
+#      in use）→ 但套件不检查它的启动 → curl 拿不到 MARKER → 断言「取到内容」FAIL。
+#      **症状完全指向「隧道坏了」，实际是测试脚手架没起来**（误导性极强）。
+#    实测：脏起点下连跑 12 次失败 6 次（60%）；清场后连跑全绿、跑完零残留。
+#    → 套件自身的 trap cleanup 是有效的，缺的只是「跑前」这一步。
+preclean() {
+  local pids
+  pids="$(pgrep -f 'hermes-ss2022-e2e/xray run' 2>/dev/null || true)"
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null
+  pids="$(pgrep -f "http.server ${P_WEB}" 2>/dev/null || true)"
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null
+  # 轮询等端口真正释放（不等够就 bind 失败）
+  local i=0
+  while (( i < 100 )); do
+    ss -ltn 2>/dev/null | grep -qE ":(28701|28702|28703|28704)" || return 0
+    sleep 0.1; i=$((i+1))
+  done
+  return 1
+}
+
 PASS=0; FAIL=0
 ck() {
   if [[ "$2" == "$3" ]]; then printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1))
@@ -49,6 +72,9 @@ P_RELAY=28702; P_SOCKS=28703; P_LANDING=28701; P_WEB=28704
 
 echo "=== 分流模式端到端：切 mode → 流量真按模式走 ==="
 echo
+
+# 跑前清场（必须在端口常量定义之后、起任何服务之前）
+preclean || echo "  [WARN] 端口未在 10s 内释放，可能有外部占用" >&2
 
 _k="$("$XRAY_BIN" x25519 2>/dev/null)"
 PRIV="$(awk '/^PrivateKey:/{print $2} /^Private key:/{print $3}' <<<"$_k")"
@@ -136,6 +162,18 @@ echo "MARKER-B" > "$TMP/web/b.txt"
 (cd "$TMP/web" && exec python3 -m http.server "$P_WEB" --bind 127.0.0.1) >"$TMP/web.log" 2>&1 &
 TRACKED_PIDS+=("$!")
 sleep 1.2
+# ⚠️ 必须校验 web 真的起来了（2026-09-21 实测）：bind 失败时套件原先照跑，
+#    最终表现为「取到内容」FAIL —— **看起来像隧道坏了，实际是脚手架没起来**。
+#    这里显式自检：未 LISTEN 就立刻报明确原因并退出（不再让症状误导排查方向）。
+if ! wait_listen "$P_WEB" 5; then
+  echo "  [FAIL] 测试脚手架未就绪：web (端口 $P_WEB) 未能监听 —— 非隧道问题" >&2
+  echo "         原因（web.log 尾部）:" >&2
+  tail -3 "$TMP/web.log" 2>&1 | sed 's/^/           /' >&2
+  echo "         提示: 端口可能被上一次残留进程占用（pgrep -f 'http.server ${P_WEB}'）" >&2
+  FAIL=$((FAIL+1))
+  printf ' PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
+  exit 1
+fi
 
 XRAY_LOCATION_ASSET="$GEO_ASSET" "$XRAY_BIN" run -format=json -config "$TMP/client.json" >"$TMP/client.out" 2>&1 &
 TRACKED_PIDS+=("$!")

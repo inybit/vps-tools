@@ -39,6 +39,25 @@ wait_listen() {  # $1=端口 [超时秒]
 
 XRAY_BIN="${XRAY_BIN:-/tmp/hermes-ss2022-e2e/xray}"
 [[ -x "$XRAY_BIN" ]] || { echo "需要真实 xray 二进制: $XRAY_BIN" >&2; exit 1; }
+
+# ⚠️ 跑前必须清场（2026-09-21 实测，与 mode-e2e 同因，勿删）：
+#    本套件用固定端口（28601-28604）。上一次运行被杀（Ctrl-C / 超时 / 调试中断）
+#    留下进程时，**下一次运行会静默假红**：web 端口被占 → `python3 -m http.server`
+#    bind 失败 → 套件原先不检查 → curl 拿不到 MARKER → 断言 FAIL。
+#    **症状指向「隧道/链路坏了」，实际是测试脚手架没起来。**
+preclean() {
+  local pids
+  pids="$(pgrep -f 'hermes-ss2022-e2e/xray run' 2>/dev/null || true)"
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null
+  pids="$(pgrep -f "http.server ${P_WEB}" 2>/dev/null || true)"
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null
+  local i=0
+  while (( i < 100 )); do
+    ss -ltn 2>/dev/null | grep -qE ":(28601|28602|28603|28604)" || return 0
+    sleep 0.1; i=$((i+1))
+  done
+  return 1
+}
 GEO_ASSET="${GEO_ASSET:-/tmp/geodata}"
 [[ -f "${GEO_ASSET}/geosite.dat" ]] || { echo "需要 geo 数据: ${GEO_ASSET}" >&2; exit 1; }
 
@@ -66,6 +85,9 @@ echo "=== 阶段 3 端到端：链路真能通（loopback）==="
 echo "xray: $("$XRAY_BIN" version | head -1 | awk '{print $2}')"
 echo "端口: landing=${P_LANDING} relay=${P_RELAY} socks=${P_SOCKS} web=${P_WEB}"
 echo
+
+# 跑前清场（端口常量已定义、起任何服务之前）
+preclean || echo "  [WARN] 端口未在 10s 内释放，可能有外部占用" >&2
 
 # ---------- 生成密钥 ----------
 REALITY_KEYS="$("$XRAY_BIN" x25519 2>/dev/null)"
@@ -173,6 +195,14 @@ echo "[3] 启动三方进程"
 (cd "$TMP/web" && exec python3 -m http.server "$P_WEB" --bind 127.0.0.1) >"$TMP/web.log" 2>&1 &
 TRACKED_PIDS+=("$!")
 sleep 1.2
+# ⚠️ web 自检失败时必须点明【原因】（2026-09-21 实测）：bind 被占时原先只报
+#    「目标 web 自检」FAIL，**看起来像脚手架以外的问题**。这里补上根因与处置提示。
+if ! wait_listen "$P_WEB" 5; then
+  echo "  [FAIL] 测试脚手架未就绪：web (端口 $P_WEB) 未能监听 —— 非链路问题" >&2
+  echo "         原因（web.log 尾部）:" >&2
+  tail -3 "$TMP/web.log" 2>&1 | sed 's/^/           /' >&2
+  echo "         提示: 端口可能被上一次残留进程占用（pgrep -f 'http.server ${P_WEB}'）" >&2
+fi
 ck "  目标 web 自检" "$(curl -s --max-time 5 --noproxy '*' "http://127.0.0.1:${P_WEB}/marker.txt")" "LANDING-MARKER-OK"
 
 # 落地机（带 access log，用于证明流量真到落地）
