@@ -29,10 +29,20 @@ RCLONE_BIN="${RCLONE_BIN:-$(command -v rclone 2>/dev/null || true)}"
 #     以及 install_self 依赖的新函数未纳入提取列表 → 该套件已 72/0 全绿，移出本列表。
 KNOWN_FAIL='verify-xray-deploy-split.sh'
 
+# ⚠️ 聚合 runner 必须排除，否则其内部套件会被跑两遍（2026-09-21 实测）：
+#   verify-xray-deploy-all.sh 是「xray 全部套件的串行 runner」，本身不是套件。
+#   glob `tests/verify-*.sh` 会命中它 → behavior/chain/e2e/latest/mode-e2e/routing/
+#   split/version-select/xhttp3-nginx 每个执行两次，其中 ~183s 是纯重复
+#   （全量 8m47s → 去掉后约 2m）。
+#   该 runner 仍可用 `bash tests/verify-xray-deploy-all.sh` 单独跑（只跑 xray 域）。
+AGGREGATORS='verify-xray-deploy-all.sh'
+
 npass=0; nfail=0; failed=""
 for t in tests/verify-*.sh; do
   [[ -f "$t" ]] || continue
   name="$(basename "$t")"
+  # 聚合 runner 跳过（其内容已由各自套件覆盖，跑它 = 重复执行）
+  [[ " $AGGREGATORS " == *" $name "* ]] && continue
   [[ -n "$FILTER" && "$name" != *"$FILTER"* ]] && continue
   printf '%-42s ' "$name"
   if bash "$t" > "/tmp/run-all.$$.out" 2>&1; then
