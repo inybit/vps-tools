@@ -41,7 +41,7 @@ KNOWN_FAIL=''
 #   该 runner 仍可用 `bash tests/verify-xray-deploy-all.sh` 单独跑（只跑 xray 域）。
 AGGREGATORS='verify-xray-deploy-all.sh'
 
-npass=0; nfail=0; nskip=0; failed=""; skipped=""
+npass=0; nfail=0; nskip=0; failed=""; skipped=""; partial_skip=""
 for t in tests/verify-*.sh; do
   [[ -f "$t" ]] || continue
   name="$(basename "$t")"
@@ -67,8 +67,19 @@ for t in tests/verify-*.sh; do
       "$(grep -oE 'SKIP[: ].*' "/tmp/run-all.$$.out" | head -1 | cut -c1-60)"
     nskip=$((nskip+1)); skipped="$skipped $name"
   else
-    printf 'PASS  %s\n' "$(grep -oE 'PASS=[0-9]+ FAIL=[0-9]+' "/tmp/run-all.$$.out" | tail -1)"
-    npass=$((npass+1))
+    # ⚠️ 部分 SKIP（套件跑了、但其中若干项因网络/限流未查证）不能报成纯 PASS：
+    #    否则「没查证」会被静默当成「查过了没问题」（同 2026-09-21「SKIP 当 PASS」教训）。
+    #    判据：汇总行里的 SKIP=N（N>0）。
+    summary="$(grep -oE 'PASS=[0-9]+ FAIL=[0-9]+' "/tmp/run-all.$$.out" | tail -1)"
+    partial="$(grep -oE 'SKIP=[0-9]+' "/tmp/run-all.$$.out" | tail -1 | cut -d= -f2)"
+    if [[ -n "${partial:-}" && "${partial:-0}" -gt 0 ]]; then
+      printf 'PASS* %s  ← 其中 %s 项因网络未查证\n' "$summary" "$partial"
+      npass=$((npass+1)); nskip=$((nskip+partial))
+      partial_skip="${partial_skip} ${name}(${partial})"
+    else
+      printf 'PASS  %s\n' "$summary"
+      npass=$((npass+1))
+    fi
   fi
 done
 rm -f "/tmp/run-all.$$.out"
@@ -77,4 +88,5 @@ echo "------------------------------------------------"
 echo "套件: 通过 $npass / 失败 $nfail / 跳过 $nskip"
 [[ -n "$failed" ]] && echo "失败:$failed"
 [[ -n "$skipped" ]] && echo "跳过（未跑任何断言，不计入通过）:$skipped"
+[[ -n "$partial_skip" ]] && echo "部分未查证（网络/限流，未计入 PASS）:$partial_skip"
 exit $(( nfail > 0 ? 1 : 0 ))

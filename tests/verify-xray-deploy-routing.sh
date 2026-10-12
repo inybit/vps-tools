@@ -17,10 +17,48 @@ TOOL="${REPO}/proxy/xray-deploy"
 MAIN="${TOOL}/xray-deploy.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ck() {
   if [[ "$2" == "$3" ]]; then printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1))
   else printf '  [FAIL] %s\n         期望: %s\n         实际: %s\n' "$1" "$3" "$2"; FAIL=$((FAIL+1)); fi
+}
+
+# ---------- 网络探针：三态（2026-10-12 用户批准 B+A）----------
+# 背景：A 段查证 geosite/geoip 标签存在性（仓库铁律「不手写 DOMAIN-SUFFIX，先查证」）。
+# 原实现两个缺陷：
+#   ① 单次 curl 定生死 —— 而 MetaCubeX 端点在【快速连续请求】下会被限流，
+#      实测同一 URL 快速连发 40 次失败 15 次（37.5%，码 000）；慢速请求 0%。
+#      本段恰好是 8 次快速连续 → 坏窗口下必然假红。
+#   ② 断言 `code == 200` 把【网络不可达】与【标签真被删（404）】塌缩成同一种红，
+#      而后者才是本套件要守的回归 → 真回归被网络噪声淹没。
+#
+# 修法（B 语义 + A 容错）：
+#   200      → PASS
+#   404      → FAIL（定论：标签确实不存在 = 真回归；404 不重试，重试无意义）
+#   000/空/5xx/429 → 重试 3 次（退避 1s/2s）仍失败 → SKIP（网络类，非回归，不计 FAIL）
+# ⚠️ SKIP 是独立第三态：不计入 PASS，也绝不当 FAIL —— 但必须在汇总里显式可见，
+#    否则「网络坏了」会被静默当成「查过了没问题」（仓库既有教训：SKIP 当 PASS 会掩盖长期未执行）。
+probe_tag() {  # $1=kind(geosite|geoip) $2=tag → 输出 http_code
+  local kind="$1" tag="$2" url code attempt
+  url="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/${kind}/${tag}.yaml"
+  for attempt in 1 2 3; do
+    # ⚠️ 不要写 `|| echo 000`：curl 失败时 -w 已打印 000，再补一个会拼成 "000000"（实测踩过），
+    #    把「网络失败」伪装成一个畸形状态码。失败让它输出空，由下面的 case 归一化。
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url" 2>/dev/null || true)"
+    case "$code" in
+      200|404) printf '%s' "$code"; return 0 ;;   # 定论，不重试
+    esac
+    [[ "$attempt" -lt 3 ]] && sleep "$attempt"    # 退避 1s / 2s
+  done
+  printf '000'
+}
+
+ck_probe() {  # $1=显示名 $2=code —— 按故障类型分流，不让网络问题冒充回归
+  case "$2" in
+    200) printf '  [PASS] %s 存在\n' "$1"; PASS=$((PASS+1)) ;;
+    404) printf '  [FAIL] %s 不存在（HTTP 404）—— 标签真被删除，是回归！\n' "$1"; FAIL=$((FAIL+1)) ;;
+    *)   printf '  [SKIP] %s 无法查证（HTTP %s，网络/限流；非回归）\n' "$1" "$2"; SKIP=$((SKIP+1)) ;;
+  esac
 }
 
 echo "=== 分流模式回归 ==="
@@ -39,15 +77,11 @@ HAS_GEO=0
 # ---------- A. geosite 标签存在性（铁律） ----------
 echo "[A] geosite 标签查证（MetaCubeX 数据源）"
 for tag in category-ai-!cn google youtube openai category-ads-all cn; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-    "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/${tag}.yaml" 2>/dev/null || echo 000)"
-  ck "geosite:${tag} 存在（HTTP ${code}）" "$code" "200"
+  ck_probe "geosite:${tag}" "$(probe_tag geosite "$tag")"
 done
 # geoip 标签
 for tag in cn private; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-    "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/${tag}.yaml" 2>/dev/null || echo 000)"
-  ck "geoip:${tag} 存在（HTTP ${code}）" "$code" "200"
+  ck_probe "geoip:${tag}" "$(probe_tag geoip "$tag")"
 done
 echo
 
@@ -243,6 +277,9 @@ ck "  usage 含 category-ai-!cn" "$(bash "$MAIN" -h 2>&1 | grep -c 'category-ai-
 echo
 
 echo "==================================="
-printf ' PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
+printf ' PASS=%d FAIL=%d SKIP=%d\n' "$PASS" "$FAIL" "$SKIP"
+if [[ "$SKIP" -gt 0 ]]; then
+  echo " ⚠️ ${SKIP} 项因网络/限流未能查证（未计入 PASS）—— 网络恢复后请重跑"
+fi
 echo "==================================="
 [[ "$FAIL" -eq 0 ]]
