@@ -46,22 +46,43 @@ gen_client_singbox_vless_xhttp() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey(�
 EOF
 }
 
-gen_client_singbox_hysteria2() {  # $1=name $2=ip $3=port $4=password $5=domain $6=brutal_up $7=brutal_down
+# hy2 客户端片段：自签证书用【证书指纹 pin】，不再用 insecure
+# $1=name $2=ip $3=port $4=password $5=domain $6=brutal_up $7=brutal_down $8=pin_hex(忽略) $9=pin_pubkey_b64
+#
+# ⚠️ sing-box 的 pin 是【公钥 SPKI 的 sha256】（base64），不是整证书哈希
+#    （common/tls/std_client.go VerifyPublicKeySHA256：sha256(MarshalPKIXPublicKey)）；
+#    字段 certificate_public_key_sha256 自 1.13.0 起可用（整证书版 certificate_sha256 要 1.15.0）。
+# ⚠️ 与 mihomo 同理：设置该字段后 sing-box 会 InsecureSkipVerify=true
+#    → 不能再写 insecure: true，否则 pin 白写。
+gen_client_singbox_hysteria2() {
   # BRUTAL 带宽字符串（如 "100 mbps"）→ sing-box 需数字（up_mbps/down_mbps）
+  local name="$1" ip="$2" port="$3" password="$4" domain="$5" bup="$6" bdown="$7" pubpin="$9"
   local up_num down_num
-  up_num="$(echo "${6:-}" | grep -oE '^[0-9]+' || true)"
-  down_num="$(echo "${7:-}" | grep -oE '^[0-9]+' || true)"
+  up_num="$(echo "${bup:-}" | grep -oE '^[0-9]+' || true)"
+  down_num="$(echo "${bdown:-}" | grep -oE '^[0-9]+' || true)"
   cat <<EOF
 {
   "type": "hysteria2",
-  "tag": "xray-${1}",
-  "server": "${2}",
-  "server_port": ${3},
-  "password": "${4}",
+  "tag": "xray-${name}",
+  "server": "${ip}",
+  "server_port": ${port},
+  "password": "${password}",
   "tls": {
     "enabled": true,
-    "server_name": "${5:-${2}}",
+    "server_name": "${domain:-${ip}}",
+EOF
+  if [[ -n "${pubpin:-}" ]]; then
+    cat <<EOF
+    "certificate_public_key_sha256": ["${pubpin}"],
+EOF
+  else
+    cat <<'EOF'
     "insecure": true,
+EOF
+    printf '%s\n' "    // 无 pin 数据（state 里没有 cert_pin_pubkey_sha256，通常是本次升级前部署的）" \
+                  "    // 暂退回跳过校验；重跑 protocol edit 选 2（重签证书）即可自动带上指纹。" >&2
+  fi
+  cat <<EOF
     "alpn": ["h3"]
   }
 EOF

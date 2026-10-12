@@ -82,7 +82,8 @@ protocol_to_inbound() {  # $1=协议参数 JSON → 输出 inbound JSON（数组
       # Xray 协议名 hysteria + version 2
       # 坑（2026-08-16 真机实测）：inbound auth 必须在 settings.clients[].auth，
       # hysteriaSettings.auth 仅 outbound 有效（写那里 xray -test 通过但握手失败）
-      # Xray 26.x 客户端已移除 allowInsecure → 自签证书需 pinnedPeerCertSha256（mihomo/sing-box 仍用 skip-cert-verify/insecure）
+      # Xray 26.x 客户端已移除 allowInsecure → 自签证书用 pinnedPeerCertSha256（xray 系）
+      # mihomo/sing-box 侧对应 fingerprint / certificate_public_key_sha256（见 keys.sh 的 cert_* 函数）
       # BRUTAL 拥塞控制（可选）：finalmask.quicParams.congestion=force-brutal + brutalUp/Down；
       # 服务端启用后客户端必须配套设置带宽（mihomo up/down、sing-box up_mbps/down_mbps），否则连接失败
       jq '{

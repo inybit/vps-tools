@@ -26,6 +26,7 @@ cmd_info() {
   fi
   echo
   local i name type port uuid pub sni sid domain path cert_file password brutal_up brutal_down
+  local pin_hex pin_pub cert_self_signed
   for i in $(jq -r '.protocols | keys[]' "$STATE_FILE"); do
     name="$(jq -r ".protocols[$i].name" "$STATE_FILE")"
     type="$(jq -r ".protocols[$i].type" "$STATE_FILE")"
@@ -40,6 +41,9 @@ cmd_info() {
     password="$(jq -r ".protocols[$i].password // \"\"" "$STATE_FILE")"
     brutal_up="$(jq -r ".protocols[$i].brutal_up // \"\"" "$STATE_FILE")"
     brutal_down="$(jq -r ".protocols[$i].brutal_down // \"\"" "$STATE_FILE")"
+    pin_hex="$(jq -r ".protocols[$i].cert_pin_sha256 // \"\"" "$STATE_FILE")"
+    pin_pub="$(jq -r ".protocols[$i].cert_pin_pubkey_sha256 // \"\"" "$STATE_FILE")"
+    cert_self_signed="$(jq -r ".protocols[$i].cert_self_signed // false" "$STATE_FILE")"
     echo "----------------------------------------------"
     echo "协议: ${name}  (${type})"
     # vless-xhttp3-nginx 的「地址」不是 xray 的监听地址（xray 只监听 UDS），
@@ -54,6 +58,15 @@ cmd_info() {
       echo "密码: ${password}"
       [[ -n "$domain" ]] && echo "SNI: ${domain}"
       echo "证书: ${cert_file}"
+      if [[ -n "$pin_hex" ]]; then
+        echo "证书校验: 指纹固定 (pin) —— 客户端片段不再使用 insecure"
+        echo "  整证书 sha256 : ${pin_hex}"
+        [[ -n "$pin_pub" ]] && echo "  公钥 sha256   : ${pin_pub}   (sing-box 用)"
+      elif [[ "$cert_self_signed" == "true" ]]; then
+        echo "证书校验: ⚠️ 自签但缺指纹数据 —— 请重跑 protocol edit 选 2 重新生成"
+      else
+        echo "证书校验: 系统 CA 链校验（非自签证书）"
+      fi
       [[ -n "$brutal_up" && -n "$brutal_down" ]] && echo "BRUTAL: up=${brutal_up} down=${brutal_down}"
     elif [[ "$type" == "ss2022" ]]; then
       echo "传输: TCP+UDP (shadowsocks 2022)"
@@ -81,7 +94,7 @@ cmd_info() {
     echo
     echo "--- mihomo (Clash Meta) proxies 片段 ---"
     if [[ "$type" == "hysteria2" ]]; then
-      gen_client_mihomo_hysteria2 "$name" "$ip" "$port" "$password" "$domain" "$brutal_up" "$brutal_down"
+      gen_client_mihomo_hysteria2 "$name" "$ip" "$port" "$password" "$domain" "$brutal_up" "$brutal_down" "$pin_hex" "$pin_pub"
     elif [[ "$type" == "ss2022" ]]; then
       gen_client_mihomo_ss2022 "$name" "$ip" "$port" "$(jq -r ".protocols[$i].method" "$STATE_FILE")" "$password"
     else
@@ -90,7 +103,7 @@ cmd_info() {
     echo
     echo "--- sing-box outbounds 片段 ---"
     if [[ "$type" == "hysteria2" ]]; then
-      gen_client_singbox_hysteria2 "$name" "$ip" "$port" "$password" "$domain" "$brutal_up" "$brutal_down"
+      gen_client_singbox_hysteria2 "$name" "$ip" "$port" "$password" "$domain" "$brutal_up" "$brutal_down" "$pin_hex" "$pin_pub"
     elif [[ "$type" == "ss2022" ]]; then
       gen_client_singbox_ss2022 "$name" "$ip" "$port" "$(jq -r ".protocols[$i].method" "$STATE_FILE")" "$password"
     else

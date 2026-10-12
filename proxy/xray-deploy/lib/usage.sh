@@ -46,7 +46,7 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
                  TLS/QUIC 与证书全部由 nginx 终结（本工具不管理证书）；端口由 nginx 独占
                  nginx 配置由用户自行编写 —— `info` 会打印一份只读参考（含可粘贴的 grpc_pass 行）
                  客户端：mihomo 需 v1.19.23+（alpn: [h3]）；sing-box 上游不支持 XHTTP
-  hysteria2      Hysteria2 (hy2)（QUIC/UDP，官方默认端口 443 模拟 HTTP/3；自签证书+客户端 insecure，无需 CF token）
+  hysteria2      Hysteria2 (hy2)（QUIC/UDP，官方默认端口 443 模拟 HTTP/3；自签证书+客户端证书指纹 pin，无需 CF token）
                  TCP/UDP 端口独立：与 REALITY 的 TCP 443 可共存；UDP 端口被占时向导会提示是否卸载冲突协议
   ss2022         SS2022 (shadowsocks 2022)（TCP+UDP，2022-blake3-aes-256-gcm 等）
                  ⚠️ 定位=【中转机 → 落地机】一跳（境外↔境外）。**不要用于出境段**

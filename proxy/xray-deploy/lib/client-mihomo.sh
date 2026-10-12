@@ -45,22 +45,44 @@ gen_client_mihomo_vless_xhttp() {  # $1=name $2=ip $3=port $4=uuid $5=pubkey(忽
 EOF
 }
 
-gen_client_mihomo_hysteria2() {  # $1=name $2=ip $3=port $4=password $5=domain $6=brutal_up $7=brutal_down
+# hy2 客户端片段：自签证书用【证书指纹 pin】，不再用 insecure/skip-cert-verify
+# $1=name $2=ip $3=port $4=password $5=domain $6=brutal_up $7=brutal_down
+# $8=pin_sha256(整证书 hex) $9=pin_pubkey_b64(公钥 base64)
+#
+# ⚠️ pin 与 skip-cert-verify 语义互斥：mihomo 一旦设置 fingerprint 就
+#    InsecureSkipVerify=true 并改走 VerifyConnection 只比对指纹
+#    （component/ca/config.go:101-116）→ 再写 skip-cert-verify: true 等于让 pin 白写。
+#    故这里【二选一】：有 pin 就只写 fingerprint；无 pin（旧部署/真证书）才退回跳过校验。
+gen_client_mihomo_hysteria2() {
+  local name="$1" ip="$2" port="$3" password="$4" domain="$5" bup="$6" bdown="$7" pin="$8"
   cat <<EOF
-  - name: "xray-${1}"
+  - name: "xray-${name}"
     type: hysteria2
-    server: ${2}
-    port: ${3}
-    password: ${4}
-    sni: ${5:-${2}}
+    server: ${ip}
+    port: ${port}
+    password: ${password}
+    sni: ${domain:-${ip}}
+EOF
+  if [[ -n "${pin:-}" ]]; then
+    # 证书固定：只认这枚指纹（openssl x509 -noout -fingerprint -sha256 同源）
+    cat <<EOF
+    fingerprint: ${pin}
+EOF
+  else
+    cat <<'EOF'
+    # ⚠️ 无 pin 数据（state 里没有 cert_pin_sha256，通常是本次升级前部署的）
+    #    → 暂退回跳过校验。重跑 protocol edit 选 2（重签证书）即可自动带上指纹。
     skip-cert-verify: true
+EOF
+  fi
+  cat <<EOF
     alpn:
       - h3
 EOF
-  if [[ -n "${6:-}" && -n "${7:-}" ]]; then
+  if [[ -n "${bup:-}" && -n "${bdown:-}" ]]; then
     cat <<EOF
-    up: ${6}
-    down: ${7}
+    up: ${bup}
+    down: ${bdown}
 EOF
   fi
 }

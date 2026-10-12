@@ -31,6 +31,81 @@ normalize_bandwidth() {
   fi
 }
 
+# ============ 证书指纹（pin）：自签证书的客户端校验 ============
+#
+# 为什么需要（2026-10-12）：自签证书下客户端原本只能 insecure/skip-cert-verify
+#   = 「不验证服务器证书」→ 任何持有伪造证书的人都能冒充服务端。正确做法是
+#   **证书固定（pinning）**：客户端只认这张证书的指纹，对不上直接拒连。
+#
+# ⚠️ 三家的字段名与哈希对象都不同，不能互抄（逐个源码核实）：
+#   客户端            字段                              哈希对象         编码
+#   mihomo          fingerprint                        整张叶子证书 DER  hex
+#   sing-box        certificate_public_key_sha256      公钥 SPKI         base64
+#   hysteria(原生)   pinSHA256                          整张叶子证书 DER  hex
+#   依据：mihomo component/ca/fingerprint.go（sha256(cert.Raw)，hex，可带冒号）；
+#        sing-box common/tls/std_client.go VerifyPublicKeySHA256
+#          （sha256(x509.MarshalPKIXPublicKey(pub))，base64）；
+#        hysteria app/cmd/client.go fillTLSConfig（sha256(rawCerts[0])，hex）。
+#   三个客户端在设置 pin 时都会**自动关闭**链校验（mihomo InsecureSkipVerify=true、
+#   sing-box 同理、hysteria 覆写 VerifyPeerCertificate）→ 因此 pin 与 insecure
+#   语义互斥：同时写等于 pin 白写。
+
+# 解析守卫：先证明「这是一张能解析的证书」，再算哈希。
+# ⚠️ 少了这一步会出【假阳性指纹】：对垃圾输入，openssl 管道后半段会把空输入
+#    哈希掉，返回「空串的 sha256」（实测 notacert.pem → 47DEQpj8HBSa+/TImW+5JC…），
+#    看起来像一枚合法指纹，写进客户端后永远连不上且原因难查。
+cert_parses() {  # $1=证书文件；0=可解析的证书
+  [[ -f "$1" ]] || return 1
+  command -v openssl >/dev/null 2>&1 || return 1
+  openssl x509 -in "$1" -noout -subject >/dev/null 2>&1
+}
+
+# 整张叶子证书 DER 的 sha256 → 小写 hex（无冒号）
+# 用途：mihomo fingerprint / hysteria pinSHA256
+cert_sha256_hex() {
+  cert_parses "$1" || return 1
+  local out
+  out="$(openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null || true)"
+  out="${out##*=}"                                  # 取 "=" 后的十六进制串
+  out="$(printf '%s' "$out" | tr -d ':' | tr 'A-F' 'a-f')"
+  [[ "$out" =~ ^[0-9a-f]{64}$ ]] || return 1        # 严格 64 位校验，防截断/空值
+  printf '%s' "$out"
+}
+
+# 公钥 SPKI 的 sha256 → base64
+# 用途：sing-box certificate_public_key_sha256（1.13.0+；1.15.0 才有整证书版 certificate_sha256）
+cert_pubkey_sha256_b64() {
+  cert_parses "$1" || return 1
+  local out
+  out="$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null \
+         | openssl pkey -pubin -outform der 2>/dev/null \
+         | openssl dgst -sha256 -binary 2>/dev/null \
+         | openssl enc -base64 2>/dev/null | tr -d '\n' || true)"
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
+}
+
+# 是否自签证书（issuer == subject）。决定客户端片段用 pin 还是走链校验。
+# 用 issuer/subject 字符串比较而非 `openssl verify -CAfile self`：
+#   后者对「同 subject 的中间 CA 签发」会误判，且不同 openssl 版本退出码不一致。
+cert_is_self_signed() {
+  cert_parses "$1" || return 1
+  local iss sub
+  iss="$(openssl x509 -in "$1" -noout -issuer 2>/dev/null || true)"
+  sub="$(openssl x509 -in "$1" -noout -subject 2>/dev/null || true)"
+  [[ -n "$iss" && -n "$sub" ]] || return 1
+  [[ "${iss#*=}" == "${sub#*=}" ]]
+}
+
+# 从证书路径取两枚 pin，输出 "sha256_hex pubkey_sha256_b64"（失败则空串）
+# 调用点统一用它，避免在每个协议分支重复拼 openssl 管道。
+cert_pin_fields() {  # $1=证书文件
+  local hex b64
+  hex="$(cert_sha256_hex "$1" 2>/dev/null || true)"
+  b64="$(cert_pubkey_sha256_b64 "$1" 2>/dev/null || true)"
+  printf '%s %s' "$hex" "$b64"
+}
+
 # ============ TLS 证书（h2 等标准 TLS 协议用） ============
 CERT_DIR="${CONFIG_DIR}/certs"
 
@@ -41,7 +116,7 @@ obtain_cert() {
   log_info "TLS 证书来源（${domain}）:"
   log_info "  1) 已有证书文件路径"
   log_info "  2) acme.sh 自动签发 Let's Encrypt（HTTP-01 验证，需 80 端口空闲）"
-  log_info "  3) 自签证书（测试用，客户端需 skip-cert-verify）"
+  log_info "  3) 自签证书（客户端片段自动带证书指纹 pin，无需 insecure）"
   read_input "选择 [1-3，默认 1]: " mode
   mode="${mode:-1}"
   case "$mode" in
@@ -87,7 +162,7 @@ obtain_cert_acme() {  # $1=domain；输出 "cert_file key_file"
   acme_cmd="acme.sh"; command -v acme.sh >/dev/null 2>&1 || acme_cmd="/root/.acme.sh/acme.sh"
   # 先尝试 standalone（HTTP-01，80 端口）；失败回退自签并提示（不阻断部署）
   if port_in_use 80; then
-    log_warn "80 端口被占用，无法 HTTP-01 验证——将改用自签证书（客户端需 skip-cert-verify）"
+    log_warn "80 端口被占用，无法 HTTP-01 验证——将改用自签证书（客户端片段将带证书指纹 pin）"
     obtain_cert_selfsigned "$domain"
     return 0
   fi
@@ -97,7 +172,7 @@ obtain_cert_acme() {  # $1=domain；输出 "cert_file key_file"
         --fullchain-file "${dir}/fullchain.pem" --key-file "${dir}/privkey.pem" >/dev/null 2>&1; then
     echo "${dir}/fullchain.pem ${dir}/privkey.pem"
   else
-    log_warn "Let's Encrypt 签发失败（域名未解析到本机？80 不可达？）——改用自签证书（客户端需 skip-cert-verify）"
+    log_warn "Let's Encrypt 签发失败（域名未解析到本机？80 不可达？）——改用自签证书（客户端片段将带证书指纹 pin）"
     obtain_cert_selfsigned "$domain"
   fi
 }

@@ -86,6 +86,7 @@ proto_wizard_vless_xhttp() {  # $1=name → 输出 JSON 参数对象
 
 proto_wizard_hysteria2() {  # $1=name → 输出 JSON 参数对象
   local name="$1" port domain password certs cert_file key_file masq yn conflict brutal_up brutal_down
+  local pin_hex pin_b64 cert_self_signed=0
   # 端口冲突处理：hy2 走 UDP，TCP 同端口被占（如 reality 443）不冲突可共存；
   # UDP 端口真被占（其他 hy2/服务）才提示卸载或取消
   read -r -p "端口 [默认 443/UDP]（hy2 官方建议 443，模拟 HTTP/3；TCP 同端口被 REALITY 占用可共存）: " port
@@ -112,7 +113,7 @@ proto_wizard_hysteria2() {  # $1=name → 输出 JSON 参数对象
     log_info "UDP ${port} 空闲（TCP 同端口占用不影响，TCP/UDP 独立）"
   fi
   ensure_firewall "$port" udp
-  read -r -p "SNI/域名（自签证书时客户端 insecure，可填域名或回车用 IP）: " domain
+  read -r -p "SNI/域名（自签证书时客户端用证书指纹 pin，可填域名或回车用 IP）: " domain
   domain="${domain:-}"
   read -r -p "密码 [回车自动生成]: " password
   if [[ -z "$password" ]]; then
@@ -120,6 +121,13 @@ proto_wizard_hysteria2() {  # $1=name → 输出 JSON 参数对象
   fi
   certs="$(obtain_cert "${domain:-localhost}")" || die "证书获取失败"
   cert_file="${certs%% *}"; key_file="${certs##* }"
+  # 自签证书 → 算两枚 pin 存进 state（客户端片段据此固定证书，不再 insecure）
+  if cert_is_self_signed "$cert_file"; then
+    cert_self_signed=1
+    read -r pin_hex pin_b64 <<<"$(cert_pin_fields "$cert_file")"
+    [[ -n "$pin_hex" && -n "$pin_b64" ]] || die "自签证书指纹计算失败: ${cert_file}"
+    log_info "自签证书指纹已生成（客户端片段用 pin 固定证书，不再 insecure）"
+  fi
   read -r -p "masquerade 伪装 URL（可选，如 https://www.bing.com，回车跳过）: " masq
   masq="${masq:-}"
   # BRUTAL 拥塞控制：服务端 + 客户端必须配套设置 up/down（客户端不设会连接失败）
@@ -133,13 +141,15 @@ proto_wizard_hysteria2() {  # $1=name → 输出 JSON 参数对象
   fi
   jq -n --arg name "$name" --argjson port "$port" --arg password "$password" \
     --arg domain "$domain" --arg cert_file "$cert_file" --arg key_file "$key_file" \
-    --arg masq "$masq" --arg brutal_up "$brutal_up" --arg brutal_down "$brutal_down" '
+    --arg masq "$masq" --arg brutal_up "$brutal_up" --arg brutal_down "$brutal_down" \
+    --arg pin_hex "$pin_hex" --arg pin_b64 "$pin_b64" --argjson self "$cert_self_signed" '
     {
       name: $name, type: "hysteria2",
       port: $port, password: $password,
       domain: $domain,
       cert_file: $cert_file, key_file: $key_file
     }
+    + (if ($self == 1) then { cert_self_signed: true, cert_pin_sha256: $pin_hex, cert_pin_pubkey_sha256: $pin_b64 } else {} end)
     + (if ($masq != "") then { masquerade: $masq } else {} end)
     + (if ($brutal_up != "" and $brutal_down != "") then { brutal_up: $brutal_up, brutal_down: $brutal_down } else {} end)'
 }

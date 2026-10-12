@@ -79,12 +79,22 @@ proto_edit() {
           '.protocols = [.protocols[] | if .name==$n then .domain=$domain else . end]'
         log_warn "域名已改——请同步更新 nginx 的 server_name 与客户端 servername"
       elif [[ "$type" == "hysteria2" ]]; then
-        local domain certs cert_file key_file
+        local domain certs cert_file key_file pin_hex pin_b64 self=0
         read -r -p "新 SNI/域名: " domain
         certs="$(obtain_cert "${domain:-localhost}")" || die "证书获取失败"
         cert_file="${certs%% *}"; key_file="${certs##* }"
+        # 重签后必须重算指纹：证书变了，旧 pin 会拒连（这是 pin 的应有行为，不是 bug）
+        if cert_is_self_signed "$cert_file"; then
+          self=1
+          read -r pin_hex pin_b64 <<<"$(cert_pin_fields "$cert_file")"
+          [[ -n "$pin_hex" && -n "$pin_b64" ]] || die "自签证书指纹计算失败: ${cert_file}"
+          log_info "自签证书指纹已更新（客户端片段需重新复制）"
+        fi
         state_set --arg n "$name" --arg domain "$domain" --arg cert_file "$cert_file" --arg key_file "$key_file" \
-          '.protocols = [.protocols[] | if .name==$n then (.domain=$domain | .cert_file=$cert_file | .key_file=$key_file) else . end]'
+          --arg pin_hex "$pin_hex" --arg pin_b64 "$pin_b64" --argjson self "$self" \
+          '.protocols = [.protocols[] | if .name==$n then (.domain=$domain | .cert_file=$cert_file | .key_file=$key_file
+             | if $self == 1 then (.cert_self_signed=true | .cert_pin_sha256=$pin_hex | .cert_pin_pubkey_sha256=$pin_b64)
+               else del(.cert_self_signed, .cert_pin_sha256, .cert_pin_pubkey_sha256) end) else . end]'
       else
         local sni
         sni="$(select_fallback_domain)" || die "回落域名选择失败"

@@ -56,6 +56,7 @@ run "ss2022 + chain 配置生成（含真实 xray -test）" tests/verify-xray-de
 run "分流模式（各 mode 规则形态 + 真实 xray -test）" tests/verify-xray-deploy-routing.sh
 run "xhttp3-nginx 协议（触点/nginx 门/冲突/unit/info）" tests/verify-xray-deploy-xhttp3-nginx.sh
 run "安装版本选择（分界判定/菜单/警示）" tests/verify-xray-deploy-version-select.sh
+run "hy2 自签证书指纹 pin（原语/片段互斥/向导/契约）" tests/verify-xray-deploy-hy2-pin.sh
 run "端到端链路（真实三方 xray 进程，loopback）" tests/verify-xray-deploy-e2e.sh
 run "端到端分流切换（真实 xray 决策日志验证）" tests/verify-xray-deploy-mode-e2e.sh
 

@@ -8,7 +8,7 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.11.0` |
+| 版本 | `1.12.0` |
 | 结构 | 多文件（入口 + 26 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
@@ -97,7 +97,7 @@ sudo xray-deploy upgrade            # 不带参数 = 升到最新（原行为，
 | `vless-xhttp-reality` | VLESS-XHTTP-REALITY（含 XMUX） | 无需 | 抗封锁更强；**仅 mihomo 系客户端**（sing-box 上游无 XHTTP） |
 | `vless-xhttp` | VLESS-XHTTP-H2-TLS | 需域名解析到本机 | 真实证书，兼容性最广（旧名 `vless-h2` 兼容） |
 | `vless-xhttp3-nginx` | VLESS-XHTTP3-NGINX（HTTP/3 QUIC → nginx → UDS → xray） | **由 nginx 持有** | 需先装 nginx ≥1.25.0（含 `--with-http_v3_module`）；xray 只监听 Unix socket |
-| `hysteria2` | Hysteria2（QUIC/UDP） | 需域名（自签亦可） | 弱网/高丢包环境优势 |
+| `hysteria2` | Hysteria2（QUIC/UDP） | 需域名（自签亦可） | 弱网/高丢包环境优势；自签证书用**指纹固定（pin）**，非 insecure |
 | `ss2022` | Shadowsocks 2022 | 无需 | ⚠️ **仅用于中转→落地一跳**，不要用于出境段 |
 
 > **命名提醒**：`h2` 有歧义（HTTP/2？Hysteria2？），故统一为 `vless-xhttp`；Hysteria2 简称 `hy2`。
@@ -193,6 +193,23 @@ xray-deploy chain mode                        查看当前模式（只读，无�
   且 `xray -test` 不绑定端口，**同端口冲突在 `-test` 阶段静默通过**，只有 `run` 才暴露。
 - **hy2 的 auth 位置与 outbound 相反**：inbound 在 `settings.clients[].auth`，
   outbound 在 `hysteriaSettings.auth`（写错 `xray -test` 通过但 QUIC 握手失败）。
+- **hy2 自签证书：客户端用证书指纹 pin，不要用 insecure**。自签时 `insecure` /
+  `skip-cert-verify` 等于**不验证服务器证书**（任何伪造证书都能冒充）。本工具在自签证书下
+  自动算指纹写进 `state.json`，生成的客户端片段只认该指纹。
+  ⚠️ **pin 与 insecure 语义互斥**——三家客户端一旦设置 pin 就会自动关闭链校验，
+  同时写 `insecure` 等于让 pin 白写（本工具生成的片段已保证二选一）：
+
+  | 客户端 | 字段 | 哈希对象 | 编码 |
+  |---|---|---|---|
+  | mihomo | `fingerprint` | 整张叶子证书 DER | hex |
+  | sing-box | `certificate_public_key_sha256` | 公钥 SPKI | base64（1.13.0+） |
+  | hysteria 原生 | `pinSHA256` | 整张叶子证书 DER | hex |
+
+  → 三家**哈希对象不同，不能互抄**。`xray-deploy info` 会同时打印两枚指纹。
+  **重签证书后指纹必变**（pin 会拒连，这是 pin 的应有行为）→ 重跑
+  `protocol edit` 选 2 会重算指纹，客户端片段需重新复制。
+  升级前部署的旧 state 没有指纹字段 → 片段暂回退 `insecure` 并打印提示，
+  重跑一次 `protocol edit` 选 2 即可切到 pin。
 - **BRUTAL 带宽必须带单位**：`brutalUp: "60"` 被按 B/s 解析 → 低于 64KB/s 下限报错。
   向导对纯数字自动补 ` mbps`。
 - **验证连通性必须分层**：回环（127.0.0.1）通 ≠ 外部通（ufw 默认 deny incoming），
