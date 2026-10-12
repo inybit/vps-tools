@@ -62,6 +62,11 @@ _xray_tags_from_atom
 normalize_xray_tag
 cmd_upgrade_versioned
 warn_version_rollback
+cert_parses
+cert_sha256_hex
+cert_pubkey_sha256_b64
+cert_is_self_signed
+cert_pin_fields
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---
@@ -78,5 +83,10 @@ protocol_to_inbound
 proto_edit
 install_service_file
 state_init
+gen_client_mihomo_hysteria2
+gen_client_singbox_hysteria2
+obtain_cert
+obtain_cert_acme
+proto_wizard_hysteria2
 install_xray
 download_xray
