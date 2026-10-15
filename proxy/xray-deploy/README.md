@@ -8,8 +8,8 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.12.0` |
-| 结构 | 多文件（入口 + 26 lib） |
+| 版本 | `1.13.0` |
+| 结构 | 多文件（入口 + 27 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
 | 服务 | systemd / OpenRC |
@@ -117,8 +117,24 @@ sudo xray-deploy upgrade            # 不带参数 = 升到最新（原行为，
 | `fallback-cn-test` | Globalping 中国三网探针 | **中国方向可达性**（SNI/TLS 层阻断，ICMP 通不代表 HTTPS 通） |
 
 二者互补——VPS 侧握手快但中国方向被 SNI 阻断的域名，国内用户照样连不上。
-回落候选表按地区维护（每地区 ≥10 条），选型机制：**tier 升序排序 → 逐个实测 → 只收前 6 个**，
-展示与默认选择按握手延迟升序。
+
+### 候选范围：默认只测**本机所在地区**
+
+回落域只需**贴近本机**（越近握手越快）；跨洲候选天然高延迟，没有选型价值。
+候选表按地区维护（每地区 ≥10 条），因此 `fallback-test` **无参 = 本机所在国家（`ipinfo`/`ip-api` 自动识别）的全部候选**，
+与部署向导 `select_fallback_domain` 同口径（共用 `fallback_region_candidates`，防止两处漂移）。
+
+```bash
+xray-deploy fallback-test              # 本地区全部候选（DE 机 = 12 条，约 6 分钟）
+xray-deploy fallback-test --region JP  # 指定地区（跨地区排查/复核他机部署用）
+xray-deploy fallback-test --all        # 全部 121 条 / 10 个地区（约半小时，谨慎）
+xray-deploy fallback-test www.example.com   # 单个域名
+```
+
+> 候选表共 **121 条**（AU/CH/DE/FR/GB/HK/JP/SG/TH/US），单条实测约 30s（TLS 检测 + 3 次延迟采样）。
+> 旧版无参即整表遍历（≈1 小时，其中 90% 是跨洲白等）——**已修正为默认本地区**。
+
+部署向导侧的选型机制：**tier 升序排序 → 逐个实测 → 只收前 6 个**，展示与默认选择按握手延迟升序。
 
 > **数据出境确认（`fallback-cn-test` 专属）**：Globalping 是第三方公共 API，待测域名会被提交出境
 > 并留存在其**公开测量记录**中（提交内容仅域名 + 请求类型，不含服务器 IP / 密钥 / 节点信息）。

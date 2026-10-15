@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.12.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.13.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,15 +147,16 @@ if [[ "$CMD" == "menu" ]]; then
         ;;
       3) cmd_info ;;
       4)
-        echo "  1) 测试全部候选  2) 测试指定域名  3) 中国方向检测(Globalping，需确认数据出境)"
-        read_input "选择 [1-3]: " fc || { log_warn "无交互终端"; continue; }
+        echo "  1) 测试本地区候选  2) 测试指定域名  3) 测试全部候选(--all，跨地区)  4) 中国方向检测(Globalping，需确认数据出境)"
+        read_input "选择 [1-4]: " fc || { log_warn "无交互终端"; continue; }
         case "${fc:-1}" in
           1) cmd_fallback_test ;;
           2)
             read_input "输入要测试的域名: " fdom || { log_warn "无交互终端"; continue; }
             cmd_fallback_test "$fdom"
             ;;
-          3)
+          3) cmd_fallback_test --all ;;
+          4)
             read_input "输入要检测的域名（回车=全部 tier4 候选）: " fdom || { log_warn "无交互终端"; continue; }
             cmd_fallback_cn_test "$fdom"
             ;;

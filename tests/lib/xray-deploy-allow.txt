@@ -67,6 +67,9 @@ cert_sha256_hex
 cert_pubkey_sha256_b64
 cert_is_self_signed
 cert_pin_fields
+fallback_region_candidates
+_fallback_test_target
+_fallback_test_one
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---
@@ -90,3 +93,6 @@ obtain_cert_acme
 proto_wizard_hysteria2
 install_xray
 download_xray
+detect_server_country
+select_fallback_domain
+cmd_fallback_test

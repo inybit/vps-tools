@@ -13,8 +13,11 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
                                    版本默认最新，可选最近 10 个版本之一）
   xray-deploy info                 查看节点信息（明文 + 客户端配置片段）
   xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 -test 校验并重载）
-  xray-deploy fallback-test [域名] 测试回落域名握手延迟并排序（无参=全部候选）
-  xray-deploy fallback-cn-test [域名] 回落域名中国方向可达性检测（Globalping 探针；无参=全部候选）
+  xray-deploy fallback-test [域名] 测试回落域名握手延迟并排序（无参=本地区候选）
+                                   本地区 = 本机所在国家（ipinfo/ip-api 自动识别）；
+                                   跨地区要测全部候选时用 --all（121 条/10 地区，约半小时）；
+                                   也可 --region <国家码> 指定地区，如 --region DE
+  xray-deploy fallback-cn-test [域名] 回落域名中国方向可达性检测（Globalping 探针；无参=全部 tier4 候选）
                                    需要外网访问 api.globalping.io；只读检测，不改部署状态
                                    **提交前需确认数据出境**（默认拒绝；自动化用 CN_TEST_ASSUME_YES=1）
   sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）

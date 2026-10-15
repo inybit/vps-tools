@@ -94,7 +94,7 @@ sudo bash install.sh install vnstat-monitor
 | 工具 | 域 | 用途 | 依赖 | 结构 |
 |---|---|---|---|---|
 | [vnstat-monitor](monitor/vnstat-monitor/README.md) | monitor | vnStat + Telegram 流量监控：进度条 / 偏移校准 / 熔断关机 / 无限流量模式；原地更新消息防刷屏 | vnstat, jq, curl, gawk, iproute2 | 单文件 |
-| [xray-deploy](proxy/xray-deploy/README.md) | proxy | Xray 一键部署：5 协议注册表；回落域名双检（VPS 握手 + Globalping 中国方向）；中转+落地链式代理与分流；生成 mihomo/sing-box 客户端节点 | curl, unzip, jq, openssl | 多文件（25 lib） |
+| [xray-deploy](proxy/xray-deploy/README.md) | proxy | Xray 一键部署：5 协议注册表；回落域名双检（VPS 握手 + Globalping 中国方向）；中转+落地链式代理与分流；生成 mihomo/sing-box 客户端节点 | curl, unzip, jq, openssl | 多文件（27 lib） |
 | [vps-init](utils/vps-init/README.md) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 用户 + sudo + SSH 公钥注入 / 禁密码 + 随机高位端口 / Fail2Ban / UFW | curl, openssh-server | 多文件（8 lib + 2 tpl） |
 | [docker-install](utils/docker-install/README.md) | utils | Docker 官方源安装 + **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker)，固定版本 + sha256 校验）+ 非暴露模式 + 非 root 管理 + 权限体检 | curl, iptables, ufw | 多文件（8 lib） |
 | [nginx-install](web/nginx-install/README.md) | web | nginx 官方源安装（stable/mainline）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 摘要）+ apt Pin-Priority 900 + 体检 | curl, gnupg/openssl, apt/dnf/apk | 多文件（6 lib） |
@@ -186,6 +186,7 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 | `verify-docker-install.sh` | 59 | docker-install 回归（mock） |
 | `verify-install-noexec.sh` | 65 | 安装器契约：**不自动执行工具命令** + 指引子命令真实性 + README 索引完整性（mock，离线可跑） |
 | `verify-xray-deploy-routing.sh` | 56 | xray 分流规则 |
+| `verify-xray-deploy-fallback-scope.sh` | 31 | 回落候选范围（默认本地区，跨地区需 --all） |
 | `verify-xray-deploy-chain.sh` | 46 | xray 链式代理 |
 | `verify-vps-backup-e2e.sh` | 48 | vps-backup 真机 E2E（需 restic+rclone，local backend 模拟 GDrive，零出境） |
 | `verify-vps-init-user-sshkey.sh` | 34 | vps-init 建用户 + 注入公钥（mock） |

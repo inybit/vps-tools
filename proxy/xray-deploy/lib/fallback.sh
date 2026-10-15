@@ -5,9 +5,34 @@
 detect_server_country() {
   local c
   c="$(curl -s --max-time 10 https://ipinfo.io/country 2>/dev/null || true)"
-  [[ "$c" =~ ^[A-Z]{2}$ ]] && { echo "$c"; return 0; }
+  if [[ "$c" =~ ^[A-Z]{2}$ ]]; then echo "$c"; return 0; fi
   c="$(curl -s --max-time 10 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null || true)"
-  [[ "$c" =~ ^[A-Z]{2}$ ]] && echo "$c" || echo "US"
+  if [[ "$c" =~ ^[A-Z]{2}$ ]]; then echo "$c"; return 0; fi
+  # 两个数据源都失败时静默按 US 处理会让「本地区候选」范围失真
+  # （测错地区、白等半小时）→ 必须出声，并提示可用 --region 显式指定
+  log_warn "无法识别本机所在国家（ipinfo/ip-api 均失败），暂按 US 处理；可用 --region <国家码> 显式指定"
+  echo "US"
+}
+
+# 列出某地区的回落候选：每行 "域名|备注"（tier 升序，tier5 大厂排除）
+# 为什么抽成函数（2026-10-15）：地区过滤口径原先只写在 select_fallback_domain 里，
+#   cmd_fallback_test 完全不过滤（无参 = 候选表全部 121 条 / 10 个地区）→ 两处漂移。
+#   现由部署向导与 fallback-test 共用，单一权威源。
+fallback_region_candidates() {  # $1=国家码（如 DE）；无该地区候选时返回 1（不输出）
+  local want="${1^^}" dom c t note line
+  local -a rows=()
+  for line in "${FALLBACK_CANDIDATES[@]}"; do
+    IFS='|' read -r dom c t note <<<"$line"
+    [[ "$t" == "5" ]] && continue
+    [[ "$c" == "$want" ]] || continue
+    rows+=("${t}|${dom}|${note}")
+  done
+  [[ ${#rows[@]} -gt 0 ]] || return 1
+  IFS=$'\n' rows=($(sort -t'|' -k1,1 <<<"${rows[*]}")); unset IFS
+  for line in "${rows[@]}"; do
+    IFS='|' read -r _ dom note <<<"$line"
+    printf '%s|%s\n' "$dom" "$note"
+  done
 }
 
 # 测试回落域名: 返回 0=通过；输出原因到 stdout
@@ -69,23 +94,22 @@ select_fallback_domain() {
 
   # 2) 候选过滤：只取服务器所在地（country）的域名（tier5 大厂排除）
   # 2026-08-12 用户要求：候选表只取该地区的域名（不再混入他国备选）
-  for line in "${FALLBACK_CANDIDATES[@]}"; do
-    IFS='|' read -r dom c t note <<<"$line"
-    [[ "$t" == "5" ]] && continue
-    [[ "$c" == "$country" ]] || continue
-    sorted+=("${t}|${dom}|${note}")
-  done
-  if [[ ${#sorted[@]} -eq 0 ]]; then
+  # 过滤口径统一走 fallback_region_candidates（与 fallback-test 共用，防两处漂移）
+  local -a sorted_lines=()
+  while IFS= read -r line; do
+    IFS='|' read -r dom note <<<"$line"
+    sorted_lines+=("${dom}|${note}")
+  done < <(fallback_region_candidates "$country" || true)
+  if [[ ${#sorted_lines[@]} -eq 0 ]]; then
     die "候选表中无 ${country} 地区域名，请使用自有域名回落（或补充 FALLBACK_CANDIDATES）"
   fi
-  IFS=$'\n' sorted=($(sort -t'|' -k1,1 <<<"${sorted[*]}")); unset IFS
 
   # 3) 逐个测试，通过即测握手延迟；最多收 6 个
   log_info "正在测试回落候选（TLS1.3+H2+X25519+非跳转+非Cloudflare）..."
   local tested=0 shown=0 delay
-  for line in "${sorted[@]}"; do
+  for line in "${sorted_lines[@]}"; do
     [[ "$shown" -ge 6 ]] && break
-    IFS='|' read -r _ dom note <<<"$line"
+    IFS='|' read -r dom note <<<"$line"
     result="$(test_fallback_domain "$dom")" || true   # 防 set -e：失败(return 1)会终止脚本
     tested=$((tested+1))
     if [[ "$result" == "ok" ]]; then
