@@ -29,7 +29,11 @@ MOCK="$T/mock"; mkdir -p "$MOCK" "$T/usr/local/bin" "$T/etc" "$T/usr/local/lib"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); echo "  [PASS] $1"; }
 bad(){ FAIL=$((FAIL+1)); echo "  [FAIL] $1  <<< $2"; }
-chk(){ if eval "$2"; then ok "$1"; else bad "$1" "$2"; fi; }
+# ⚠️ 断言里大量 `sed ... | grep -q` 管道：grep -q 命中即退出 → 上游 sed 收 SIGPIPE(141)
+#    → pipefail 把整条管道判失败（2026-09-21 记为 25% 假红；2026-10-17 被测函数
+#    变长后再次稳定触发）。断言只关心「文本是否包含」，与管道退出码无关，
+#    故 eval 时在子 shell 里临时关掉 pipefail。
+chk(){ if ( set +o pipefail; eval "$2" ); then ok "$1"; else bad "$1" "$2"; fi; }
 
 TOOL="vnstat-monitor"
 

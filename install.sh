@@ -36,7 +36,7 @@ set -euo pipefail
 #    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
 #    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
 #    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.14.0"
+VPS_TOOLS_VERSION="1.15.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -106,6 +106,70 @@ record_tool_ref() {  # $1=工具名 $2=ref
 record_installer_ref() {  # $1=ref
   mkdir -p "${INSTALL_DIR}" 2>/dev/null || true
   printf '%s\n' "$1" > "${INSTALL_DIR}/.installer-ref" 2>/dev/null || true
+}
+
+# ============ 整包快照（tarball）下载 ============
+# 逐文件下载的瓶颈是**请求数 × RTT**，不是字节数：每个 curl 都是独立连接，
+# TCP+TLS 握手 ≈ 3 RTT。xray-deploy 要 28 次（主脚本 1 + lib 27），
+# 200ms RTT 的 VPS 上光握手就 ~17s；而整仓 tar.gz 只有 ~280KB。
+# 故改为一次拉整包、本地解包、拷工具目录；一次运行内按 ref 缓存复用。
+# 失败（codeload 被墙 / 无 tar / 解包异常）自动回退逐文件下载，行为与旧版一致。
+# VPS_TOOLS_NO_TARBALL=1 强制关闭（出问题时的逃生开关）。
+TARBALL_ROOT=""                                   # 本次运行的缓存根（mktemp -d）
+TARBALL_SRC=""                                    # 最近一次 ensure_tarball 成功的仓库根
+TARBALL_DISABLED="${VPS_TOOLS_NO_TARBALL:-0}"     # 1 = 永不用整包
+
+# 确保某 ref 的整包已解包。成功 return 0 并设置全局 TARBALL_SRC。
+# ⚠️ 必须**直接调用**，不能写 `src="$(ensure_tarball ...)"`：命令替换会开子 shell，
+#    TARBALL_ROOT / .ok 缓存 / EXIT trap 全落在子 shell 里 —— 子 shell 一退出就触发
+#    trap 删掉刚解包的树，父进程拿到的是**已消失的路径** → 每次都静默回退逐文件，
+#    而且整包会被下载两次（2026-10-17 实测踩到）。
+ensure_tarball() {  # $1=ref
+  TARBALL_SRC=""
+  [[ "$TARBALL_DISABLED" != "1" ]] || return 1
+  command -v tar >/dev/null 2>&1 || return 1
+  local ref="$1" dir root tgz d
+  if [[ -z "$TARBALL_ROOT" ]]; then
+    TARBALL_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vps-tools-src.XXXXXX")" || {
+      TARBALL_DISABLED=1; return 1
+    }
+    # 只清理自己创建的临时目录（不碰任何系统目录）
+    trap '[[ -n "${TARBALL_ROOT:-}" && -d "${TARBALL_ROOT}" ]] && rm -rf "${TARBALL_ROOT}" || true' EXIT
+  fi
+  dir="${TARBALL_ROOT}/$(printf '%s' "$ref" | tr '/ ' '__')"
+  if [[ -f "${dir}/.ok" ]]; then
+    TARBALL_SRC="$(cat "${dir}/.ok")"
+    return 0
+  fi
+  # 同一 ref 已失败过 → 直接回退，避免每个工具都等一次超时
+  if [[ -f "${dir}/.failed" ]]; then return 1; fi
+
+  mkdir -p "$dir"
+  tgz="${dir}/src.tgz"
+  if ! curl -fsSL --max-time 120 \
+        "https://codeload.github.com/${GH_USER}/${GH_REPO}/tar.gz/${ref}" \
+        -o "$tgz" 2>/dev/null; then
+    log_warn "整包下载失败（ref: ${ref}），回退逐文件下载"
+    : > "${dir}/.failed"; rm -f "$tgz"; return 1
+  fi
+  if ! tar -xzf "$tgz" -C "$dir" 2>/dev/null; then
+    log_warn "整包解压失败（ref: ${ref}），回退逐文件下载"
+    : > "${dir}/.failed"; rm -f "$tgz"; return 1
+  fi
+  rm -f "$tgz"
+
+  # 包内顶层是唯一的 <repo>-<ref>/ 目录；不用 --strip-components（busybox tar 兼容性）
+  root=""
+  for d in "$dir"/*/; do
+    [[ -d "$d" ]] && { root="${d%/}"; break; }
+  done
+  if [[ -z "$root" || ! -f "${root}/install.sh" ]]; then
+    log_warn "整包结构异常（ref: ${ref}），回退逐文件下载"
+    : > "${dir}/.failed"; return 1
+  fi
+  printf '%s\n' "$root" > "${dir}/.ok"
+  TARBALL_SRC="$root"
+  return 0
 }
 
 # ============ 工具注册表 ============
@@ -248,32 +312,53 @@ install_tool() {  # $1=tool line
 
   mkdir -p "$dest"
 
-  log_info "下载 ${name} (ref: ${ref}): ${base}/${script}"
-  if ! curl -fsSL --max-time 60 "${base}/${script}" -o "${dest}/$(basename "$script")"; then
-    log_err "下载失败: ${script}（ref: ${ref}；检查网络、仓库路径或该 ref 是否含此文件）"
-    # 清理失败产生的残留目录，避免半成品坏状态
-    rm -rf "$dest_rm"
-    return 1
+  # ---- 优先整包快照：1 次请求代替 (主脚本 + N 个附加文件) 次 ----
+  local src_root="" used_tarball=0 ef ef_rel ef_dest
+  if ensure_tarball "$ref" && [[ -n "$TARBALL_SRC" && -d "${TARBALL_SRC}/${script_dir}" ]]; then
+    src_root="$TARBALL_SRC"
+    log_info "下载 ${name} (ref: ${ref}): 整包快照"
+    # 拷到 .new 再替换：装完的树必须 == 该 ref 的树，不留旧版本残留文件
+    if cp -a "${src_root}/${script_dir}" "${dest}.new" 2>/dev/null; then
+      rm -rf "$dest_rm"
+      mv "${dest}.new" "$dest"
+      used_tarball=1
+      chmod +x "${dest}/$(basename "$script")" 2>/dev/null || true
+      find "$dest" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+      log_info "已安装脚本: ${dest}/$(basename "$script")（共 $(find "$dest" -type f | wc -l) 个文件）"
+    else
+      rm -rf "${dest}.new" 2>/dev/null || true
+      log_warn "整包拷贝失败，回退逐文件下载"
+    fi
   fi
-  chmod +x "${dest}/$(basename "$script")"
-  log_info "已安装脚本: ${dest}/$(basename "$script")"
 
-  # 附加文件（多文件工具：lib/*.sh、templates/*.tpl 等，主脚本 source 依赖它们）
-  local ef ef_rel ef_dest
-  for ef in $extra_files; do
-    ef_rel="${ef#"$script_dir"/}"     # 剥掉分类前缀，保留工具目录内相对路径
-    ef_dest="${dest}/${ef_rel}"
-    mkdir -p "$(dirname "$ef_dest")"  # lib/、templates/ 子目录可能不存在（防 curl 23）
-    if ! curl -fsSL --max-time 60 "${base}/${ef}" -o "$ef_dest"; then
-      log_err "下载失败: ${ef}（附加文件，ref: ${ref}，安装不完整，已回滚）"
-      rm -rf "$dest"
+  # ---- 回退路径：逐文件下载（codeload 不可达 / 无 tar / 整包异常时）----
+  if [[ $used_tarball -eq 0 ]]; then
+    log_info "下载 ${name} (ref: ${ref}): ${base}/${script}"
+    if ! curl -fsSL --max-time 60 "${base}/${script}" -o "${dest}/$(basename "$script")"; then
+      log_err "下载失败: ${script}（ref: ${ref}；检查网络、仓库路径或该 ref 是否含此文件）"
+      # 清理失败产生的残留目录，避免半成品坏状态
+      rm -rf "$dest_rm"
       return 1
     fi
-    case "$ef_rel" in
-      *.sh) chmod +x "$ef_dest" ;;
-    esac
-    log_info "已安装附加文件: ${ef_dest}"
-  done
+    chmod +x "${dest}/$(basename "$script")"
+    log_info "已安装脚本: ${dest}/$(basename "$script")"
+
+    # 附加文件（多文件工具：lib/*.sh、templates/*.tpl 等，主脚本 source 依赖它们）
+    for ef in $extra_files; do
+      ef_rel="${ef#"$script_dir"/}"     # 剥掉分类前缀，保留工具目录内相对路径
+      ef_dest="${dest}/${ef_rel}"
+      mkdir -p "$(dirname "$ef_dest")"  # lib/、templates/ 子目录可能不存在（防 curl 23）
+      if ! curl -fsSL --max-time 60 "${base}/${ef}" -o "$ef_dest"; then
+        log_err "下载失败: ${ef}（附加文件，ref: ${ref}，安装不完整，已回滚）"
+        rm -rf "$dest"
+        return 1
+      fi
+      case "$ef_rel" in
+        *.sh) chmod +x "$ef_dest" ;;
+      esac
+      log_info "已安装附加文件: ${ef_dest}"
+    done
+  fi
 
   # 记录本次安装的 ref：后续 update 不指定 --ref 时沿用（= 版本固定/回滚语义）
   record_tool_ref "$name" "$ref"
@@ -295,7 +380,11 @@ EOF
     else
       env_was_created=1
       mkdir -p "$(dirname "$env_tgt")"
-      if curl -fsSL --max-time 60 "${base}/${env_tpl}" -o "$env_tgt"; then
+      if [[ $used_tarball -eq 1 && -f "${src_root}/${env_tpl}" ]] \
+         && cp "${src_root}/${env_tpl}" "$env_tgt" 2>/dev/null; then
+        chmod 600 "$env_tgt"
+        log_info "已生成配置模板: ${env_tgt} —— 请编辑填入真实密钥!"
+      elif curl -fsSL --max-time 60 "${base}/${env_tpl}" -o "$env_tgt"; then
         chmod 600 "$env_tgt"
         log_info "已生成配置模板: ${env_tgt} —— 请编辑填入真实密钥!"
       else
@@ -495,7 +584,12 @@ install_self() {
 
   mkdir -p "$(dirname "${VPS_TOOLS_CMD}")"   # curl 写文件前先建目录（防 curl 23）
   local tmp="${VPS_TOOLS_CMD}.tmp.$$"
-  if ! curl -fsSL --max-time 60 "${base}/install.sh" -o "$tmp"; then
+  # 优先复用整包快照（本次运行已拉过则 0 次请求；未拉过则 1 次请求拿整包）
+  local got_ok=0
+  if ensure_tarball "$ref" && [[ -n "$TARBALL_SRC" && -f "${TARBALL_SRC}/install.sh" ]]; then
+    cp "${TARBALL_SRC}/install.sh" "$tmp" 2>/dev/null && got_ok=1
+  fi
+  if [[ $got_ok -eq 0 ]] && ! curl -fsSL --max-time 60 "${base}/install.sh" -o "$tmp"; then
     rm -f "$tmp"
     log_warn "下载失败，管理命令保持原样: ${VPS_TOOLS_CMD}"
     return 1

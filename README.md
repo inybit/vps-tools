@@ -83,6 +83,11 @@ sudo bash install.sh install vnstat-monitor
   注册表第 5 字段就是这里提示的子命令（`vnstat-monitor` → `setup`、`xray-deploy` → `install`、
   `vps-bench` → `nodequality`；`docker-install` / `nginx-install` / `vps-backup` / `vps-init`
   留空 = 无参运行工具本身进向导）。**该字段只用于打印提示，安装器绝不代为执行。**
+- **下载策略**（v1.15.0 起）：优先拉一次整仓 `tar.gz`（codeload）本地解包，
+  而不是逐文件下载 —— 逐文件的瓶颈是请求数 × RTT（每个 curl = 独立 TCP+TLS 连接，
+  xray-deploy 要 28 次，200ms RTT 上光握手就 ~17s；整仓 gzip 只有 ~280KB）。
+  整包失败（codeload 不可达 / 无 tar / 解包异常）会**自动回退**逐文件下载，行为与旧版一致。
+  `VPS_TOOLS_NO_TARBALL=1` 可强制走逐文件（逃生开关）。
 - 定时调度统一用 **systemd timer**（工具 `setup` 子命令管理），不使用 crontab
 - 重复 `install` = 覆盖更新，幂等
 

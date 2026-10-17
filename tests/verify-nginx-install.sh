@@ -498,7 +498,9 @@ for fn in ('installed_self_version', 'remote_version', 'tools_fp_of', 'fetch_rem
            'self_running_version', 'ver_gt', 'reload_tools_registry', 'install_self',
            # 2026-10-17 引入 ref（版本坐标）后 install_self 依赖这三个：
            # 漏登记 → 函数不存在 → install_self 在 set -u 下提前失败（假红）
-           'installer_ref', 'base_url_for', 'record_installer_ref'):
+           'installer_ref', 'base_url_for', 'record_installer_ref',
+           # 2026-10-17 引入整包下载后 install_self 又依赖它（harness 里置 TARBALL_DISABLED=1 短路）
+           'ensure_tarball'):
     m = re.search(r'^' + fn + r'\(\) \{.*?^\}', src, re.M | re.S)
     # EUID 是 bash 只读变量，替换成可 mock 的名字才能测非 root 分支
     out.append(m.group(0).replace('$EUID', '$FAKE_EUID'))
@@ -535,6 +537,10 @@ ENV_REF=""
 CLI_REF=""
 ACTION="self-update"
 INSTALL_DIR="$SELF_T/root"
+# 整包下载短路：本 harness 只测 install_self 的版本/落盘逻辑，不走网络
+TARBALL_ROOT=""
+TARBALL_SRC=""
+TARBALL_DISABLED="1"
 VPS_TOOLS_CMD="$1"
 PATH="$SELF_T/fake:$PATH"
 install_self
