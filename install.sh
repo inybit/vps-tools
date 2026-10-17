@@ -10,6 +10,12 @@
 #   bash <(curl -sSL https://raw.githubusercontent.com/inybit/vps-tools/main/install.sh) update vnstat-monitor    # 更新指定工具
 #   bash <(curl -sSL https://raw.githubusercontent.com/inybit/vps-tools/main/install.sh) uninstall vnstat-monitor # 卸载指定工具
 #
+# 版本坐标（ref = 分支名或 tag 名；安装器与每个工具各有独立版本号）:
+#   install vps-backup --ref vps-backup-v1.4.0     # 装/回滚到指定工具版本
+#   update  vps-backup --ref main                  # 回到最新
+#   self-update --ref v1.13.0                      # 安装器回滚到指定版本
+#   VPS_TOOLS_REF=v1.14.0 bash install.sh install x   # 全局覆盖（工具与安装器同一 ref）
+#
 # 特性:
 #   - 脚本下载到 /usr/local/lib/vps-tools/<tool>/ 下，与系统文件隔离，卸载干净
 #   - 每个工具自动生成命令入口 /usr/local/bin/<tool>，直接以工具名调用
@@ -30,18 +36,77 @@ set -euo pipefail
 #    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
 #    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
 #    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.13.0"
+VPS_TOOLS_VERSION="1.14.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
 GH_REPO="vps-tools"
-GH_BRANCH="main"
-BASE_URL="https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/${GH_BRANCH}"
+GH_BRANCH="main"                  # 默认跟踪分支（未指定 ref 时）
+GH_ORIGIN="https://raw.githubusercontent.com"
+RAW_BASE="${GH_ORIGIN}/${GH_USER}/${GH_REPO}"
+DEFAULT_REF="$GH_BRANCH"
+BASE_URL="${RAW_BASE}/${DEFAULT_REF}"   # 默认 ref 的基址（保持变量名，兼容既有测试的 sed 重写）
 
 INSTALL_DIR="/usr/local/lib/vps-tools"   # 脚本库根目录（与命令入口分离）
 CONFIG_DIR="/etc"                        # 配置目标目录
 CMD_DIR="/usr/local/bin"                 # 命令入口目录
 VPS_TOOLS_CMD="${CMD_DIR}/vps-tools"     # 管理命令入口
+
+# ============ 版本坐标（ref）============
+# 发布模型：安装器与每个工具各有独立版本号（见 README「版本与发布」）。
+#   - 安装器版本 = VPS_TOOLS_VERSION → git tag  v<ver>
+#   - 工具版本   = 各脚本内 VERSION 变量 → git tag  <tool>-v<ver>
+# 装哪个版本由 ref 决定（ref = 分支名或 tag 名，两者在 raw URL 里同形）：
+#   --ref <tag>            本次操作从该 ref 取文件。工具操作只影响该工具；
+#                          只有 `self-update --ref <tag>` 才影响安装器自身。
+#   VPS_TOOLS_REF=<tag>    全局覆盖（工具与安装器都从该 ref 取）。
+# 已装 ref 记录在 ${INSTALL_DIR}/<tool>/.ref 与 ${INSTALL_DIR}/.installer-ref，
+# 后续 update 沿用记录值 = **版本固定**；要回到最新须显式 `--ref main`。
+CLI_REF=""                    # 本次运行 --ref（main() 解析后赋值）
+ENV_REF="${VPS_TOOLS_REF:-}"  # 全局覆盖（环境变量）
+ACTION=""                     # 本次运行动作（main() 赋值，installer_ref 用）
+
+# ref 合法性：禁止空格/引号/路径穿越，避免拼出意外 URL
+ref_valid() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+}
+
+base_url_for() {
+  printf '%s/%s\n' "$RAW_BASE" "$1"
+}
+
+# 某工具本次使用的 ref（优先级：--ref > VPS_TOOLS_REF > 已装记录 > 默认分支）
+tool_ref() {  # $1=工具名
+  local name="$1" f="${INSTALL_DIR}/${name}/.ref" r=""
+  if [[ -n "$CLI_REF" ]]; then echo "$CLI_REF"; return 0; fi
+  if [[ -n "$ENV_REF" ]]; then echo "$ENV_REF"; return 0; fi
+  [[ -r "$f" ]] && r="$(head -1 "$f" 2>/dev/null || true)"
+  [[ -n "$r" ]] || r="$DEFAULT_REF"
+  echo "$r"
+}
+
+# 安装器自身使用的 ref
+# ⚠️ CLI_REF 只对 `self-update` 生效：`install vps-backup --ref vps-backup-v1.4.0`
+#    若连带把安装器也降到那个 tag 的 install.sh，等于悄悄降级安装器。
+installer_ref() {
+  if [[ -n "$ENV_REF" ]]; then echo "$ENV_REF"; return 0; fi
+  if [[ "$ACTION" == "self-update" && -n "$CLI_REF" ]]; then echo "$CLI_REF"; return 0; fi
+  local f="${INSTALL_DIR}/.installer-ref" r=""
+  [[ -r "$f" ]] && r="$(head -1 "$f" 2>/dev/null || true)"
+  [[ -n "$r" ]] || r="$DEFAULT_REF"
+  echo "$r"
+}
+
+# 记录某工具实际安装的 ref（供后续 update 沿用；失败不阻塞安装）
+record_tool_ref() {  # $1=工具名 $2=ref
+  printf '%s\n' "$2" > "${INSTALL_DIR}/${1}/.ref" 2>/dev/null || true
+}
+
+# 记录安装器自身跟的 ref（被 pin 到 tag 后，后续自更新只跟该 tag，不会被拉回 main）
+record_installer_ref() {  # $1=ref
+  mkdir -p "${INSTALL_DIR}" 2>/dev/null || true
+  printf '%s\n' "$1" > "${INSTALL_DIR}/.installer-ref" 2>/dev/null || true
+}
 
 # ============ 工具注册表 ============
 # 每行一个工具: name|script|env_template|env_target|interactive_setup|extra_files
@@ -98,15 +163,16 @@ ver_gt() {  # $1 > $2 返回 0
 
 # 启动检查更新：比对远端 install.sh 版本号，有新版返回 0 并提示；离线/同版本返回 1（静默）
 check_update() {
-  local remote
+  local remote ref
+  ref="$(installer_ref)"
   remote="$(remote_version)"
   [[ -n "$remote" ]] || return 1
   if ver_gt "$remote" "$VPS_TOOLS_VERSION"; then
-    log_warn "检测到新版本 vps-tools ${remote}（当前 ${VPS_TOOLS_VERSION}）"
+    log_warn "检测到新版本 vps-tools ${remote}（当前 ${VPS_TOOLS_VERSION}，ref: ${ref}）"
     # ⚠️ 提示顺序很重要：**先给管道方式**。旧副本（< 1.7.1）的「菜单选 5」自身有 bug
     #    （拿副本自己跟自己比版本 → 恒报已最新，永远拉不到新版），
     #    所以对尚未修复的机器，选 5 是无效指引。
-    log_warn "更新方式: curl -sSL ${BASE_URL}/install.sh | sudo bash"
+    log_warn "更新方式: curl -sSL $(base_url_for "$ref")/install.sh | sudo bash"
     log_warn "  （已装 v1.7.1+ 的机器也可用「菜单选 5 / vps-tools self-update」）"
     return 0
   fi
@@ -126,23 +192,53 @@ find_tool() {  # $1=tool name → 输出注册表行
   return 1
 }
 
+# 已装工具的版本号（读工具主脚本里的版本变量；读不到则空）
+# 各工具版本变量名不同（VERSION / VP_VERSION / DI_VERSION / NI_VERSION /
+# VPS_INIT_VERSION / VPS_BENCH_VERSION），故按「首个 *_VERSION="x.y.z"」取。
+installed_tool_version() {  # $1=注册表行
+  local name script f
+  name=$(tool_field "$1" 1)
+  script=$(tool_field "$1" 2)
+  f="${INSTALL_DIR}/${name}/$(basename "$script")"
+  [[ -r "$f" ]] || return 0
+  sed -n 's/^[A-Za-z_]*VERSION="\([0-9][0-9.]*\)".*/\1/p' "$f" | head -1
+}
+
+# 已装工具的 ref 记录（空 = 未记录，视为默认分支）
+installed_tool_ref() {  # $1=工具名
+  local f="${INSTALL_DIR}/${1}/.ref"
+  [[ -r "$f" ]] || return 0
+  head -1 "$f" 2>/dev/null || true
+}
+
 list_tools() {
   log_info "可用工具:"
-  local line
+  local line name ver ref
   for line in "${TOOLS[@]}"; do
-    echo "  - $(tool_field "$line" 1)  ($(tool_field "$line" 2))"
+    name=$(tool_field "$line" 1)
+    if [[ -d "${INSTALL_DIR}/${name}" ]]; then
+      ver="$(installed_tool_version "$line")"
+      ref="$(installed_tool_ref "$name")"
+      echo "  - ${name}  ($(tool_field "$line" 2))  已装 v${ver:-?}${ref:+ @${ref}}"
+    else
+      echo "  - ${name}  ($(tool_field "$line" 2))"
+    fi
   done
 }
 
 # ============ 核心操作 ============
 install_tool() {  # $1=tool line
-  local line="$1" name script env_tpl env_tgt post_install extra_files
+  local line="$1" name script env_tpl env_tgt post_install extra_files ref base
   name=$(tool_field "$line" 1)
   script=$(tool_field "$line" 2)
   env_tpl=$(tool_field "$line" 3)
   env_tgt=$(tool_field "$line" 4)
   post_install=$(tool_field "$line" 5)
   extra_files=$(tool_field "$line" 6)
+
+  # 版本坐标：本次从哪个 ref 取文件（--ref > VPS_TOOLS_REF > 已装记录 > main）
+  ref="$(tool_ref "$name")"
+  base="$(base_url_for "$ref")"
 
   local dest="${INSTALL_DIR}/${name}"
   local script_dir
@@ -152,9 +248,9 @@ install_tool() {  # $1=tool line
 
   mkdir -p "$dest"
 
-  log_info "下载 ${name}: ${BASE_URL}/${script}"
-  if ! curl -fsSL --max-time 60 "${BASE_URL}/${script}" -o "${dest}/$(basename "$script")"; then
-    log_err "下载失败: ${script}（检查网络或仓库路径）"
+  log_info "下载 ${name} (ref: ${ref}): ${base}/${script}"
+  if ! curl -fsSL --max-time 60 "${base}/${script}" -o "${dest}/$(basename "$script")"; then
+    log_err "下载失败: ${script}（ref: ${ref}；检查网络、仓库路径或该 ref 是否含此文件）"
     # 清理失败产生的残留目录，避免半成品坏状态
     rm -rf "$dest_rm"
     return 1
@@ -168,8 +264,8 @@ install_tool() {  # $1=tool line
     ef_rel="${ef#"$script_dir"/}"     # 剥掉分类前缀，保留工具目录内相对路径
     ef_dest="${dest}/${ef_rel}"
     mkdir -p "$(dirname "$ef_dest")"  # lib/、templates/ 子目录可能不存在（防 curl 23）
-    if ! curl -fsSL --max-time 60 "${BASE_URL}/${ef}" -o "$ef_dest"; then
-      log_err "下载失败: ${ef}（附加文件，安装不完整，已回滚）"
+    if ! curl -fsSL --max-time 60 "${base}/${ef}" -o "$ef_dest"; then
+      log_err "下载失败: ${ef}（附加文件，ref: ${ref}，安装不完整，已回滚）"
       rm -rf "$dest"
       return 1
     fi
@@ -178,6 +274,9 @@ install_tool() {  # $1=tool line
     esac
     log_info "已安装附加文件: ${ef_dest}"
   done
+
+  # 记录本次安装的 ref：后续 update 不指定 --ref 时沿用（= 版本固定/回滚语义）
+  record_tool_ref "$name" "$ref"
 
   # 命令入口（工具名直接调用）：wrapper → 脚本库
   mkdir -p "${CMD_DIR}"   # 命令目录可能不存在（干净系统 /usr/local/bin 也需确保）
@@ -196,7 +295,7 @@ EOF
     else
       env_was_created=1
       mkdir -p "$(dirname "$env_tgt")"
-      if curl -fsSL --max-time 60 "${BASE_URL}/${env_tpl}" -o "$env_tgt"; then
+      if curl -fsSL --max-time 60 "${base}/${env_tpl}" -o "$env_tgt"; then
         chmod 600 "$env_tgt"
         log_info "已生成配置模板: ${env_tgt} —— 请编辑填入真实密钥!"
       else
@@ -222,7 +321,7 @@ EOF
     log_info "${name} 配置已存在（更新），保留原配置。如需重新配置: sudo ${next_cmd}"
   fi
 
-  log_info "${name} 安装完成。"
+  log_info "${name} 安装完成（ref: ${ref}）。"
 }
 
 uninstall_tool() {  # $1=tool line
@@ -287,8 +386,10 @@ installed_self_version() {  # $1=文件（默认 ${VPS_TOOLS_CMD}）
 }
 
 # 远端 install.sh 的版本号（读不到则空 = 离线/被墙）
+# ref 取 installer_ref()：被 pin 到 tag 的机器只跟该 tag 比对，不会被「最新版」打扰
 remote_version() {
-  curl -fsSL --max-time 10 "${BASE_URL}/install.sh" 2>/dev/null \
+  local base; base="$(base_url_for "$(installer_ref)")"
+  curl -fsSL --max-time 10 "${base}/install.sh" 2>/dev/null \
     | grep -m1 '^VPS_TOOLS_VERSION=' | cut -d= -f2 | tr -d '"' | tr -d ' '
 }
 
@@ -301,9 +402,10 @@ tools_fp_of() {  # $1=文件
 
 # 下载远端 install.sh 到临时文件（成功则输出路径）
 fetch_remote_install() {
-  local t
+  local t base
+  base="$(base_url_for "$(installer_ref)")"
   t="$(mktemp "${TMPDIR:-/tmp}/vps-tools-remote.XXXXXX")" || return 1
-  if curl -fsSL --max-time 30 "${BASE_URL}/install.sh" -o "$t" 2>/dev/null && [[ -s "$t" ]]; then
+  if curl -fsSL --max-time 30 "${base}/install.sh" -o "$t" 2>/dev/null && [[ -s "$t" ]]; then
     printf '%s\n' "$t"
   else
     rm -f "$t"; return 1
@@ -345,6 +447,13 @@ reload_tools_registry() {
 install_self() {
   [[ $EUID -eq 0 ]] || return 1
   local cur remote running cur_fp remote_fp
+  local ref base explicit=0
+  ref="$(installer_ref)"
+  base="$(base_url_for "$ref")"
+  # 用户显式指定 ref（--ref 仅 self-update 生效 / VPS_TOOLS_REF 全局）→ 允许降级（回滚语义）
+  if [[ -n "$ENV_REF" || ( "$ACTION" == "self-update" && -n "$CLI_REF" ) ]]; then
+    explicit=1
+  fi
   cur="$(installed_self_version)"
   running="$(self_running_version)"
   remote="$(remote_version)"
@@ -370,20 +479,23 @@ install_self() {
     [[ -n "$rf" ]] && rm -f "$rf"
     if [[ -z "$remote_fp" || -z "$cur_fp" || "$remote_fp" == "$cur_fp" ]]; then
       log_info "管理命令已是最新（v${cur}）: ${VPS_TOOLS_CMD}"
+      record_installer_ref "$ref"
       return 0
     fi
     log_warn "版本同为 v${cur}，但远端工具清单已变更（${cur_fp} → ${remote_fp}）——继续更新"
   fi
 
   # 本机正在运行的 install.sh 比远端还新 → 不用远端覆盖自己（防降级）
-  if ver_gt "$running" "$remote"; then
+  # 例外：用户显式 --ref 指定版本时允许降级（回滚到旧版本是合法诉求）
+  if [[ $explicit -eq 0 ]] && ver_gt "$running" "$remote"; then
     log_warn "本机版本 v${running} 高于远端 v${remote}，不覆盖（跳过）"
+    log_warn "  如需回滚到指定版本: sudo vps-tools self-update --ref <tag>"
     return 0
   fi
 
   mkdir -p "$(dirname "${VPS_TOOLS_CMD}")"   # curl 写文件前先建目录（防 curl 23）
   local tmp="${VPS_TOOLS_CMD}.tmp.$$"
-  if ! curl -fsSL --max-time 60 "${BASE_URL}/install.sh" -o "$tmp"; then
+  if ! curl -fsSL --max-time 60 "${base}/install.sh" -o "$tmp"; then
     rm -f "$tmp"
     log_warn "下载失败，管理命令保持原样: ${VPS_TOOLS_CMD}"
     return 1
@@ -398,6 +510,7 @@ install_self() {
   fi
   chmod +x "$tmp"
   mv -f "$tmp" "${VPS_TOOLS_CMD}"
+  record_installer_ref "$ref"
   # 立刻重载 TOOLS 清单：本进程后续的 install_tool 必须用新清单，
   # 否则本轮新增的 lib 文件会被漏装（2026-09-19 事故）
   reload_tools_registry || log_warn "重载工具清单失败，本次安装可能漏装新增文件"
@@ -464,7 +577,10 @@ interactive_menu() {
   check_update || true
   while true; do
     echo
-    echo "===== vps-tools 管理（v${VPS_TOOLS_VERSION}）====="
+    local iref pin=""
+    iref="$(installer_ref)"
+    [[ "$iref" != "$DEFAULT_REF" ]] && pin="，ref: ${iref}"
+    echo "===== vps-tools 管理（v${VPS_TOOLS_VERSION}${pin}）====="
     echo "  1) 安装工具（选择）"
     echo "  2) 更新工具（选择）"
     echo "  3) 卸载工具（选择）"
@@ -491,8 +607,28 @@ interactive_menu() {
 
 # ============ 主流程 ============
 main() {
-  local action="${1:-menu}"
-  local tool="${2:-}"
+  # 参数解析：支持 --ref <tag> / --ref=<tag>（可出现在任意位置，其余按位置参数）
+  local -a pos=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ref)   CLI_REF="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
+      --ref=*) CLI_REF="${1#*=}"; shift ;;
+      *)       pos+=("$1"); shift ;;
+    esac
+  done
+  local action="${pos[0]:-menu}"
+  local tool="${pos[1]:-}"
+  ACTION="$action"
+
+  # ref 校验：防止拼出意外 URL（空格/引号/路径穿越）
+  if [[ -n "$CLI_REF" ]] && ! ref_valid "$CLI_REF"; then
+    log_err "非法 ref: ${CLI_REF}（只允许字母数字与 . _ / -，如 v1.14.0、vps-backup-v1.4.0、main）"
+    return 1
+  fi
+  if [[ -n "$ENV_REF" ]] && ! ref_valid "$ENV_REF"; then
+    log_err "非法 VPS_TOOLS_REF: ${ENV_REF}"
+    return 1
+  fi
 
   case "$action" in
     menu)
@@ -510,10 +646,19 @@ vps-tools ${VPS_TOOLS_VERSION} — vps-tools 管理工具
   vps-tools install [工具]     安装工具（无参 = 交互式选择）
   vps-tools update  [工具]     更新工具
   vps-tools uninstall [工具]   卸载工具
-  vps-tools list               查看已安装/可用的工具
+  vps-tools list               查看已安装/可用的工具（含已装版本与 ref）
   vps-tools self-update        更新 vps-tools 自身
   vps-tools -v, --version      显示版本号
   vps-tools -h, --help         显示本帮助
+
+版本坐标（ref = 分支名或 tag 名）:
+  --ref <tag>                  本次操作从该 ref 取文件（工具操作只影响该工具）
+  self-update --ref <tag>      把安装器自身切到指定版本（回滚）
+  环境变量 VPS_TOOLS_REF=<tag> 全局覆盖（工具与安装器都从该 ref 取）
+  示例:
+    vps-tools install vps-backup --ref vps-backup-v1.4.0   # 装/回滚到 1.4.0
+    vps-tools update vps-backup --ref main                 # 回到最新
+    vps-tools self-update --ref v1.13.0                    # 安装器回滚
 
 可用工具: ${TOOLS[*]//|*|*|*|*/}
 EOF
@@ -521,10 +666,12 @@ EOF
     install|update)
       # root 检测：非 root 明确提示（管道方式无法自动 sudo 重执行，统一引导）
       if [[ $EUID -ne 0 ]]; then
+        local hint_ref="$DEFAULT_REF"
+        [[ -n "$tool" ]] && hint_ref="$(tool_ref "$tool")"
         log_err "需要 root 权限（安装目标 ${INSTALL_DIR} 和 ${CONFIG_DIR} 需 root 写入）。"
         log_err "推荐管道方式（自动以 root 运行）："
-        echo "    curl -sSL https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/${GH_BRANCH}/install.sh | sudo bash -s -- ${action}${tool:+ ${tool}}"
-        log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}"
+        echo "    curl -sSL $(base_url_for "$hint_ref")/install.sh | sudo bash -s -- ${action}${tool:+ ${tool}}${CLI_REF:+ --ref ${CLI_REF}}"
+        log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}${CLI_REF:+ --ref ${CLI_REF}}"
         exit 1
       fi
       install_self || true   # 管理命令与工具一起保持最新（成功时会自动重载 TOOLS 清单）

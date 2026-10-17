@@ -12,6 +12,7 @@
 - [仓库结构](#仓库结构)
 - [测试](#测试)
 - [开发约定](#开发约定)
+- [版本与发布](#版本与发布)
 - [更新 vps-tools 自身](#更新-vps-tools-自身)
 
 ---
@@ -160,6 +161,8 @@ vps-tools/
 │       ├── lib/                    # common/interact/pkg/restic/remote/exclude/paths/deps/
 │       │                           #   repo/backup/retention/restore/timer/status/usage
 │       └── templates/vps-backup.env.example
+├── scripts/
+│   └── release.sh          # 一键发版：读版本号 → 打 tag → 建 GitHub Release
 └── tests/                  # 回归测试（run-all.sh = 统一入口）
 ```
 
@@ -234,6 +237,46 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 - **环境变量导出**：从 env 文件读取的变量若需传给子进程，必须写
   `export VAR="$VAL"`；**裸 `export VAR` 只标记已存在的变量，不会赋值**
   （曾导致 `RCLONE_CONFIG` 静默失效，见 `tests/verify-vps-backup.sh` 的 `[O]` 组）
+
+---
+
+## 版本与发布
+
+**两条独立的版本轴，互不影响**：
+
+| 轴 | 版本来源 | tag 形式 | 什么时候递增 |
+|---|---|---|---|
+| 安装器 | `install.sh` 的 `VPS_TOOLS_VERSION` | `v1.14.0` | 改了安装器自身行为 / `TOOLS` 注册表 |
+| 工具 | 各工具主脚本的版本变量（`VERSION` / `VP_VERSION` / …） | `vps-backup-v1.4.0` | 改了该工具 |
+
+发版（`scripts/release.sh` 自动读版本号 → 打 tag → 建 GitHub Release，notes 按路径过滤）：
+
+```bash
+bash scripts/release.sh vps-backup          # 只发 vps-backup
+bash scripts/release.sh installer           # 只发安装器
+bash scripts/release.sh --all               # 安装器 + 全部工具
+bash scripts/release.sh --all --dry-run     # 只看要发什么，不写任何东西
+```
+
+脚本前置校验：工作区必须干净（dry-run 除外）、tag 不得已存在。发布后**回读 GitHub
+实际状态**复核（`gh release view`），不以 `gh` 自报成功为准。
+
+### 按版本安装 / 回滚
+
+`ref` = 分支名或 tag 名。安装时记录在 `/usr/local/lib/vps-tools/<tool>/.ref`，
+之后 `update` 默认沿用记录值 → **装过的版本会固定住**，不会被悄悄拉到最新。
+
+```bash
+sudo vps-tools install vps-backup --ref vps-backup-v1.4.0   # 装/回滚到指定版本
+sudo vps-tools update  vps-backup --ref main                # 回到最新
+sudo vps-tools self-update --ref v1.13.0                    # 安装器回滚
+VPS_TOOLS_REF=v1.14.0 sudo bash install.sh install vps-backup   # 全局覆盖（工具+安装器同一 ref）
+sudo vps-tools list                                         # 看已装版本与 ref
+```
+
+⚠️ `--ref` 用在 `install`/`update` 上**只影响该工具**；只有 `self-update --ref` 才改安装器自身
+（否则装个旧工具会连带把安装器降级）。显式 `--ref` 允许降级（回滚语义），
+不带 `--ref` 的 `self-update` 仍防降级。
 
 ---
 
