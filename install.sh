@@ -322,8 +322,9 @@ install_tool() {  # $1=tool line
   local dest="${INSTALL_DIR}/${name}"
   local script_dir
   script_dir="$(dirname "$script")"
-  # 下载失败回滚：rm -rf 目标必须非空（防 INSTALL_DIR 误展开）
-  local dest_rm="${dest:?}"
+  # 替换失败回滚：备份/临时目录都由 $dest 派生（防 INSTALL_DIR 误展开）
+  local dest_bak="${dest}.bak.$$"
+  local dest_new="${dest}.new"
 
   mkdir -p "$dest"
 
@@ -332,65 +333,105 @@ install_tool() {  # $1=tool line
   if ensure_tarball "$ref" && [[ -n "$TARBALL_SRC" && -d "${TARBALL_SRC}/${script_dir}" ]]; then
     src_root="$TARBALL_SRC"
     log_info "下载 ${name} (ref: ${ref}): 整包快照"
-    # 拷到 .new 再替换：装完的树必须 == 该 ref 的树，不留旧版本残留文件
-    if cp -a "${src_root}/${script_dir}" "${dest}.new" 2>/dev/null; then
-      rm -rf "$dest_rm"
-      mv "${dest}.new" "$dest"
-      used_tarball=1
+    # 拷到 .new 并在【替换之前】补齐共享文件：任何一步失败都不动现有安装
+    # （旧实现先 rm -rf 旧树再 mv，共享文件失败时既无回滚又留下坏安装）
+    if cp -a "${src_root}/${script_dir}" "$dest_new" 2>/dev/null; then
       # 跨目录共享文件（如 lib/core.sh:lib/core.sh）：整包拷贝只覆盖了工具目录，
       # 源在工具目录之外的文件必须单独拷进来，否则装完 source 缺文件 → 启动即崩
-      local _ef _src _dst _cp_ok=1
+      local _ef _src _dst _ok=1
       for _ef in $extra_files; do
         IFS=$'\t' read -r _src _dst < <(ef_src_dst "$_ef" "$script_dir")
         [[ "$_src" == "$script_dir"/* ]] && continue
-        mkdir -p "$(dirname "${dest}/${_dst}")"
-        if ! cp -a "${src_root}/${_src}" "${dest}/${_dst}" 2>/dev/null; then
-          log_err "整包缺共享文件: ${_src}（注册表 extra_files 指向的文件不在该 ref 内）"
-          _cp_ok=0
+        mkdir -p "$(dirname "${dest_new}/${_dst}")"
+        cp -a "${src_root}/${_src}" "${dest_new}/${_dst}" 2>/dev/null && continue
+        # 该 ref 的工具是否真的依赖共享核心：旧 tag（v1.15.0 及更早）根本没有
+        # lib/core.sh，其 common.sh 也不 source core —— 缺这个文件是正常状态，
+        # 报错会让「按版本安装/回滚」对旧 tag 全部失效。
+        if grep -q 'core\.sh' "${dest_new}/lib/common.sh" 2>/dev/null; then
+          log_err "整包缺共享文件: ${_src}（该 ref 的工具依赖共享核心，安装不完整；现有安装未改动）"
+          _ok=0
           break
         fi
+        log_warn "跳过共享文件 ${_src}：该 ref（${ref}）的工具尚未使用共享核心"
       done
-      if [[ $_cp_ok -eq 0 ]]; then
-        rm -rf "$dest_rm"
+      if [[ $_ok -eq 0 ]]; then
+        rm -rf "$dest_new"
         return 1
       fi
+      # 原子替换：旧树先备份，替换成功才删备份；替换失败恢复旧树
+      if [[ -d "$dest" ]]; then
+        mv "$dest" "$dest_bak"
+      fi
+      if mv "$dest_new" "$dest" 2>/dev/null; then
+        rm -rf "$dest_bak"
+      else
+        rm -rf "$dest"
+        if [[ -d "$dest_bak" ]]; then
+          mv "$dest_bak" "$dest"
+        fi
+        log_err "替换安装目录失败，已恢复原安装: ${dest}"
+        return 1
+      fi
+      used_tarball=1
       chmod +x "${dest}/$(basename "$script")" 2>/dev/null || true
       find "$dest" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
       log_info "已安装脚本: ${dest}/$(basename "$script")（共 $(find "$dest" -type f | wc -l) 个文件）"
     else
-      rm -rf "${dest}.new" 2>/dev/null || true
+      rm -rf "$dest_new" 2>/dev/null || true
       log_warn "整包拷贝失败，回退逐文件下载"
     fi
   fi
 
   # ---- 回退路径：逐文件下载（codeload 不可达 / 无 tar / 整包异常时）----
   if [[ $used_tarball -eq 0 ]]; then
+    # 同样先装到 .new，全部成功才替换：中途失败不得破坏现有安装
+    rm -rf "$dest_new"
+    mkdir -p "$dest_new"
     log_info "下载 ${name} (ref: ${ref}): ${base}/${script}"
-    if ! curl -fsSL --max-time 60 "${base}/${script}" -o "${dest}/$(basename "$script")"; then
-      log_err "下载失败: ${script}（ref: ${ref}；检查网络、仓库路径或该 ref 是否含此文件）"
-      # 清理失败产生的残留目录，避免半成品坏状态
-      rm -rf "$dest_rm"
+    if ! curl -fsSL --max-time 60 "${base}/${script}" -o "${dest_new}/$(basename "$script")"; then
+      log_err "下载失败: ${script}（ref: ${ref}；检查网络、仓库路径或该 ref 是否含此文件；现有安装未改动）"
+      rm -rf "$dest_new"
       return 1
     fi
-    chmod +x "${dest}/$(basename "$script")"
+    chmod +x "${dest_new}/$(basename "$script")"
     log_info "已安装脚本: ${dest}/$(basename "$script")"
 
     # 附加文件（多文件工具：lib/*.sh、templates/*.tpl 等，主脚本 source 依赖它们）
     # 条目可为 `源路径:目标相对路径`（共享文件），见 ef_src_dst
     for ef in $extra_files; do
       IFS=$'\t' read -r ef_src ef_rel < <(ef_src_dst "$ef" "$script_dir")
-      ef_dest="${dest}/${ef_rel}"
+      ef_dest="${dest_new}/${ef_rel}"
       mkdir -p "$(dirname "$ef_dest")"  # lib/、templates/ 子目录可能不存在（防 curl 23）
       if ! curl -fsSL --max-time 60 "${base}/${ef_src}" -o "$ef_dest"; then
-        log_err "下载失败: ${ef_src}（附加文件，ref: ${ref}，安装不完整，已回滚）"
-        rm -rf "$dest"
+        # 共享文件在旧 tag 上不存在是正常状态（该 ref 的工具还没用共享核心）
+        if [[ "$ef" == *:* ]] && ! grep -q 'core\.sh' "${dest_new}/lib/common.sh" 2>/dev/null; then
+          log_warn "跳过共享文件 ${ef_src}：该 ref（${ref}）的工具尚未使用共享核心"
+          continue
+        fi
+        log_err "下载失败: ${ef_src}（附加文件，ref: ${ref}，安装不完整；现有安装未改动）"
+        rm -rf "$dest_new"
         return 1
       fi
       case "$ef_rel" in
         *.sh) chmod +x "$ef_dest" ;;
       esac
-      log_info "已安装附加文件: ${ef_dest}"
+      log_info "已安装附加文件: ${dest}/${ef_rel}"
     done
+
+    # 原子替换（同整包路径）
+    if [[ -d "$dest" ]]; then
+      mv "$dest" "$dest_bak"
+    fi
+    if mv "$dest_new" "$dest" 2>/dev/null; then
+      rm -rf "$dest_bak"
+    else
+      rm -rf "$dest"
+      if [[ -d "$dest_bak" ]]; then
+        mv "$dest_bak" "$dest"
+      fi
+      log_err "替换安装目录失败，已恢复原安装: ${dest}"
+      return 1
+    fi
   fi
 
   # 记录本次安装的 ref：后续 update 不指定 --ref 时沿用（= 版本固定/回滚语义）
