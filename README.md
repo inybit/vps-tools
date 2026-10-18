@@ -105,7 +105,7 @@ sudo bash install.sh install vnstat-monitor
 | [docker-install](utils/docker-install/README.md) | utils | Docker 官方源安装 + **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker)，固定版本 + sha256 校验）+ 非暴露模式 + 非 root 管理 + 权限体检 | curl, iptables, ufw | 多文件（8 lib） |
 | [nginx-install](web/nginx-install/README.md) | web | nginx 官方源安装（stable/mainline）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 摘要）+ apt Pin-Priority 900 + 体检 | curl, gnupg/openssl, apt/dnf/apk | 多文件（6 lib） |
 | [vps-bench](bench/vps-bench/README.md) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl | 单文件 |
-| [vps-backup](backup/vps-backup/README.md) | backup | **restic + rclone(GDrive) 备份与灾难恢复**：core/data 分层；保留策略 forget+prune；每周完整性抽查；**凭证不入包**；connect/init 严格分离；**repo 密码引导**；remote 名分态诊断；Telegram 失败告警；自动生成恢复 runbook | restic, rclone（自带 sha256 校验安装）, curl | 多文件（15 lib） |
+| [vps-backup](backup/vps-backup/README.md) | backup | **restic + rclone(GDrive) 备份与灾难恢复**：core/data 分层；保留策略 forget+prune；每周完整性抽查；**凭证不入包**；connect/init 严格分离；**repo 密码引导**；remote 名分态诊断；Telegram 失败告警；自动生成恢复 runbook | restic, rclone（自带 sha256 校验安装）, curl | 多文件（16 lib） |
 
 **按域索引**：
 
