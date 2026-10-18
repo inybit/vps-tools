@@ -1,0 +1,25 @@
+name: regression
+
+# 回归门禁：tests/run-all.sh 的语义是「非零退出 = 有回归」，
+# 25 个 verify-*.sh 里缺依赖的走 SKIP（第三态），真回归才红。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-all:
+    runs-on: ubuntu-latest
+    # 本地非 root 实测全量 ~8 分钟（VPS 上 ~25s，别按那个估）
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: 回归套件
+        run: bash tests/run-all.sh
