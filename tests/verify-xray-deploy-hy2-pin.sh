@@ -27,11 +27,17 @@ MAIN="${TOOL}/xray-deploy.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ck() {  # $1=名称 $2=实际 $3=期望
   if [[ "$2" == "$3" ]]; then printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1))
   else printf '  [FAIL] %s\n         期望: %s\n         实际: %s\n' "$1" "$3" "$2"; FAIL=$((FAIL+1)); fi
 }
+# 缺依赖 ≠ 失败：YAML 结构校验依赖 PyYAML，本机 python3 可能没有（实测 Debian 13
+# 自带的 python3.14 无 pip 模块、无 yaml）。缺了要显式记 SKIP，让 run-all 报
+# 「PASS* N 项未查证」，而不是伪装成 FAIL（也不是静默当 PASS）。
+ckskip() { printf '  [SKIP] %s（%s）\n' "$1" "$2"; SKIP=$((SKIP+1)); }
+HAVE_YAML=0
+python3 -c 'import yaml' >/dev/null 2>&1 && HAVE_YAML=1
 
 echo "=== xray-deploy hy2 自签证书 pin 回归 ==="
 echo
@@ -114,13 +120,17 @@ ck "sing-box 保留 up_mbps" "$(grep -c '"up_mbps": 45,' <<<"$SB")" "1"
 # JSON / YAML 结构必须真能解析（注释混进 JSON 会毁掉整个配置）
 ck "sing-box 片段是合法 JSON（含 pin）" \
   "$(python3 -c "import json,sys; json.loads(sys.stdin.read()); print('ok')" <<<"$SB" 2>/dev/null)" "ok"
-ck "mihomo 片段是合法 YAML（含 pin）" \
-  "$(python3 -c "
+if [[ $HAVE_YAML -eq 1 ]]; then
+  ck "mihomo 片段是合法 YAML（含 pin）" \
+    "$(python3 -c "
 import sys,yaml
 y=yaml.safe_load('proxies:\n'+sys.stdin.read())
 p=y['proxies'][0]
 assert p['type']=='hysteria2' and p['fingerprint'], p
 print('ok')" <<<"$MH" 2>/dev/null)" "ok"
+else
+  ckskip "mihomo 片段是合法 YAML（含 pin）" "本机 python3 无 PyYAML"
+fi
 # 无 pin（旧部署）→ 回退原路径，且【不含】pin 字段
 MH0="$(gen_client_mihomo_hysteria2 "hy2-01" "203.0.113.10" 443 "pw" "jpanode.test" "" "" "" "" 2>/dev/null)"
 SB0="$(gen_client_singbox_hysteria2 "hy2-01" "203.0.113.10" 443 "pw" "jpanode.test" "" "" "" "" 2>/dev/null)"
@@ -130,12 +140,16 @@ ck "无 pin 时 sing-box 回退 insecure" "$(grep -c '"insecure": true' <<<"$SB0
 ck "无 pin 时 sing-box 无 pin 字段" "$(grep -c 'certificate_public_key_sha256' <<<"$SB0")" "0"
 ck "无 pin 时 sing-box 仍是合法 JSON" \
   "$(python3 -c "import json,sys; json.loads(sys.stdin.read()); print('ok')" <<<"$SB0" 2>/dev/null)" "ok"
-ck "无 pin 时 mihomo 仍是合法 YAML" \
-  "$(python3 -c "
+if [[ $HAVE_YAML -eq 1 ]]; then
+  ck "无 pin 时 mihomo 仍是合法 YAML" \
+    "$(python3 -c "
 import sys,yaml
 y=yaml.safe_load('proxies:\n'+sys.stdin.read())
 assert y['proxies'][0]['skip-cert-verify'] is True
 print('ok')" <<<"$MH0" 2>/dev/null)" "ok"
+else
+  ckskip "无 pin 时 mihomo 仍是合法 YAML" "本机 python3 无 PyYAML"
+fi
 echo
 
 # ---------- C. 向导（真 pty 跑真实函数） ----------
@@ -260,6 +274,6 @@ fi
 echo
 
 echo "==================================="
-echo " PASS=${PASS} FAIL=${FAIL}"
+echo " PASS=${PASS} FAIL=${FAIL} SKIP=${SKIP}"
 echo "==================================="
 [[ "$FAIL" -eq 0 ]]

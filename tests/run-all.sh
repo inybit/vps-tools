@@ -73,7 +73,7 @@ for t in tests/verify-*.sh; do
     summary="$(grep -oE 'PASS=[0-9]+ FAIL=[0-9]+' "/tmp/run-all.$$.out" | tail -1)"
     partial="$(grep -oE 'SKIP=[0-9]+' "/tmp/run-all.$$.out" | tail -1 | cut -d= -f2)"
     if [[ -n "${partial:-}" && "${partial:-0}" -gt 0 ]]; then
-      printf 'PASS* %s  ← 其中 %s 项因网络未查证\n' "$summary" "$partial"
+      printf 'PASS* %s  ← 其中 %s 项未查证（缺依赖/网络）\n' "$summary" "$partial"
       npass=$((npass+1)); nskip=$((nskip+partial))
       partial_skip="${partial_skip} ${name}(${partial})"
     else
@@ -85,8 +85,11 @@ done
 rm -f "/tmp/run-all.$$.out"
 
 echo "------------------------------------------------"
-echo "套件: 通过 $npass / 失败 $nfail / 跳过 $nskip"
+# nskip 混计了「整套跳过」与「部分断言未查证」，分开报才不误导
+nskip_suite=$(awk '{print NF}' <<<"${skipped:-}" )
+npartial=$(awk '{print NF}' <<<"${partial_skip:-}")
+echo "套件: 通过 $npass / 失败 $nfail / 跳过 ${nskip_suite:-0}（另有 ${npartial:-0} 套件部分未查证）"
 [[ -n "$failed" ]] && echo "失败:$failed"
 [[ -n "$skipped" ]] && echo "跳过（未跑任何断言，不计入通过）:$skipped"
-[[ -n "$partial_skip" ]] && echo "部分未查证（网络/限流，未计入 PASS）:$partial_skip"
+[[ -n "$partial_skip" ]] && echo "部分未查证（缺依赖/网络，未计入 PASS）:$partial_skip"
 exit $(( nfail > 0 ? 1 : 0 ))

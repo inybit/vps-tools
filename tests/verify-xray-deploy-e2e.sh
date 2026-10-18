@@ -38,7 +38,14 @@ wait_listen() {  # $1=端口 [超时秒]
 }
 
 XRAY_BIN="${XRAY_BIN:-/tmp/hermes-ss2022-e2e/xray}"
-[[ -x "$XRAY_BIN" ]] || { echo "需要真实 xray 二进制: $XRAY_BIN" >&2; exit 1; }
+# 缺依赖 = SKIP（第三态），不是 FAIL：
+#   run-all.sh 的语义是「非零退出 = 有回归」。缺二进制是环境问题，若报 FAIL，
+#   每个没装 xray 的机器都恒红 → 真回归被淹没（2026-10-19 实测：main 上 5 个红
+#   里 4 个是缺依赖/元数据漂移，零个产品 bug）。
+[[ -x "$XRAY_BIN" ]] || {
+  echo "SKIP: 需要真实 xray 二进制: $XRAY_BIN（可用 XRAY_BIN=... 指定）"
+  exit 0
+}
 
 # ⚠️ 跑前必须清场（2026-09-21 实测，与 mode-e2e 同因，勿删）：
 #    本套件用固定端口（28601-28604）。上一次运行被杀（Ctrl-C / 超时 / 调试中断）
@@ -59,7 +66,10 @@ preclean() {
   return 1
 }
 GEO_ASSET="${GEO_ASSET:-/tmp/geodata}"
-[[ -f "${GEO_ASSET}/geosite.dat" ]] || { echo "需要 geo 数据: ${GEO_ASSET}" >&2; exit 1; }
+[[ -f "${GEO_ASSET}/geosite.dat" ]] || {
+  echo "SKIP: 需要 geo 数据: ${GEO_ASSET}（可用 GEO_ASSET=... 指定）"
+  exit 0
+}
 
 # 端口（高位随机，避免与本机 mihomo 冲突）
 P_LANDING=28601; P_RELAY=28602; P_SOCKS=28603; P_WEB=28604
