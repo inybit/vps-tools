@@ -53,7 +53,11 @@ export PATH="$MOCK:$PATH"
 
 # ---------- 生成「远端 install.sh」（版本可调） ----------
 mk_remote() {  # $1=版本
-  sed "s/^VPS_TOOLS_VERSION=\"[^\"]*\"/VPS_TOOLS_VERSION=\"$1\"/" "$SRC_INSTALL" > "$T/remote-install.sh"
+  # 远端副本必须是「可非 root 运行」的完整副本：本套件在 [C] 会把它装成
+  # 「本机命令」，[D] 随后执行的就是它 —— 若只改版本号，[D] 会因
+  #   (a) [[ $EUID -eq 0 ]] 判定 或 (b) CMD_DIR=/usr/local/bin 写权限
+  # 而恒红（只有 root 机器才过，GitHub Actions runner 上必红）。
+  mk_local_cmd "$1" "$T/remote-install.sh"
   export MOCK_REMOTE_INSTALL="$T/remote-install.sh"
 }
 

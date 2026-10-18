@@ -15,6 +15,12 @@
 # 退出码: 0=等价, 1=有差异/错误
 set -uo pipefail
 
+# ⚠️ 排序与比较必须同 locale（2026-10-19 修）：fn_names 用 LC_ALL=C sort，
+#    但 comm 默认按【环境 locale】比较 —— 在 en_US.UTF-8 / zh_CN.UTF-8 的机器上
+#    会报 `comm: file 1 is not in sorted order` 并把全部函数判成「?」（PASS=0 FAIL=1），
+#    只有 C/POSIX locale 的机器（如 VPS）才绿。全局固定 C，别只给 sort 加前缀。
+export LC_ALL=C
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL_DIR="${REPO}/proxy/xray-deploy"
 MAIN="${TOOL_DIR}/xray-deploy.sh"
