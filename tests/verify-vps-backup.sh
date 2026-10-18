@@ -171,10 +171,13 @@ chk "入口可执行且语法正确" "bash -n '$TOOL'"
 chk "全部 lib 语法正确" "bash -n ${TOOL_DIR}/lib/*.sh"
 chk "无 [[ -r /dev/tty ]] 伪判据（仅注释可提）" \
     "! grep -nE '^[^#]*\\[\\[ *-r +/dev/tty' ${TOOL_DIR}/vps-backup.sh ${TOOL_DIR}/lib/*.sh"
-chk "包管理器探测用 if/elif 而非 && 链" \
-    "grep -q 'if command -v apk' ${TOOL_DIR}/lib/pkg.sh && ! grep -qE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' ${TOOL_DIR}/lib/pkg.sh"
+chk "包管理器探测用 if/elif 而非 && 链（实现已统一到 lib/core.sh）" \
+    "grep -q 'if command -v apk' ${REPO}/lib/core.sh && ! grep -qE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' ${REPO}/lib/core.sh"
+# 防复制粘贴回潮：抽取前 pkg.sh 里有第 6 份 detect_pkg_mgr/install_pkgs 实现
+chk "pkg.sh 不再重复定义 detect_pkg_mgr / install_pkgs" \
+    "! grep -qE '^(detect_pkg_mgr|install_pkgs)\(\)' ${TOOL_DIR}/lib/pkg.sh"
 chk "拆分后模块齐全（common/interact/pkg/restic/remote 各司其职）" \
-    "( for f in common interact pkg restic cache deps exclude backup paths repo remote retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done )"
+    "( for f in common pkg restic cache deps exclude backup paths repo remote retention restore timer status usage; do [[ -f ${TOOL_DIR}/lib/\$f.sh ]] || exit 1; done )"
 # ⚠️ 逐文件判定，且**不能**写 `awk '...' files | grep .`：
 #  * awk 跨多文件时 NR 是**累计**行数 → 单个文件超限会被总量掩盖
 #  * `awk|grep .` 的退出码取决于 grep，awk 的 exit 1 被管道吃掉 → 恒 PASS（假绿，2026-09-19 修正）
@@ -704,11 +707,17 @@ chk "env 模板指向 templates/ 且目标为 /etc/vps-backup.env" \
     "[[ \"\$(cut -d'|' -f3 <<< '$REG_LINE')\" == 'backup/vps-backup/templates/vps-backup.env.example' ]]"
 # extra_files 与磁盘逐项比对（漏列 = 安装不完整）
 # shellcheck disable=SC2034  # EXTRA/DISK 仅用于紧随其后的 eval 断言
-EXTRA="$(cut -d'|' -f6 <<< "$REG_LINE" | tr ' ' '\n' | sed 's|backup/vps-backup/||' | grep -v '^$' | sort)"
+# 条目两种格式：工具自己的文件 / `源:目标` 共享文件（如 lib/core.sh:lib/core.sh）。
+# 统一取【目标侧】再与磁盘比：共享文件的目标不在工具目录里，直接比会假红。
+EXTRA="$(cut -d'|' -f6 <<< "$REG_LINE" | tr ' ' '\n' \
+         | awk -F: '{d=(NF>1)?$2:$1; sub(/^backup\/vps-backup\//,"",d); print d}' \
+         | grep -v '^$' | sort)"
 # shellcheck disable=SC2034
 DISK="$(cd "$TOOL_DIR" && find lib -name '*.sh' | sort)"
-chk "extra_files 覆盖全部 lib/*.sh（无漏列）" "[[ \"\$EXTRA\" == \"\$DISK\" ]]"
-chk "extra_files 无多余项" "[[ \$(wc -l <<< \"\$EXTRA\") -eq \$(wc -l <<< \"\$DISK\") ]]"
+# ⚠️ 不能用 `comm -23 <<<A <<<B`：`<<<` 是重定向不是参数，两个 here-string 都重定向 stdin
+#    → comm 只剩 0 个文件操作数 → "missing operand"（coreutils 9.7 实测）。必须用进程替换。
+chk "extra_files 覆盖全部 lib/*.sh（无漏列）" "[[ -z \"\$(comm -23 <(printf '%s\\n' \"\$DISK\") <(printf '%s\\n' \"\$EXTRA\"))\" ]]"
+chk "extra_files 仅多出共享文件 lib/core.sh" "[[ \"\$(comm -13 <(printf '%s\\n' \"\$DISK\") <(printf '%s\\n' \"\$EXTRA\"))\" == 'lib/core.sh' ]]"
 chk "install.sh 版本已递增到 ≥1.7.0" "grep -qE '^VPS_TOOLS_VERSION=\"1\.(7|[89]|[1-9][0-9])\.[0-9]+\"' '$REPO/install.sh'"
 chk "README 工具清单含 vps-backup" "grep -q 'backup/vps-backup/' '$REPO/README.md'"
 chk "无硬编码密钥（脱敏铁律）" \

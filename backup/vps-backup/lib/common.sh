@@ -2,7 +2,26 @@
 # ============================================================
 # vps-backup 公共函数库
 # 被 vps-backup.sh source；日志一律输出到 stderr（铁律：返回值靠 stdout 捕获时不污染）
+#
+# 基础函数（日志 / 交互终端 / read_input / confirm / 包管理器）在仓库根
+# lib/core.sh —— 多工具共用一份实现，不要在本文件（或 lib/pkg.sh）重复定义。
+# 本文件只留 vps-backup 特有的东西：路径默认值、root 检查、环境加载。
 # ============================================================
+
+# ---------- 共享核心（仓库内 ../../../lib，安装后与本文件同目录） ----------
+if [[ -r "${BASH_SOURCE[0]%/*}/core.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${BASH_SOURCE[0]%/*}/core.sh"
+elif [[ -r "${BASH_SOURCE[0]%/*}/../../../lib/core.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${BASH_SOURCE[0]%/*}/../../../lib/core.sh"
+else
+  echo "[ERROR] 找不到共享核心 lib/core.sh（安装不完整，请重跑安装器）" >&2
+  exit 1
+fi
+
+# confirm 的免交互开关变量名（core 里用间接展开 ${!CORE_YES_VAR} 读取）
+export CORE_YES_VAR="VP_YES"   # 供 core.sh 的 confirm 用间接展开读取
 
 # 路径默认值（环境变量可覆盖——测试/非 root 场景；产品默认不变）
 : "${VP_ENV_FILE:=/etc/vps-backup.env}"
@@ -16,13 +35,8 @@
 : "${VP_RCLONE_BIN:=/usr/local/bin/rclone}"
 : "${VP_UNIT_DIR:=/etc/systemd/system}"
 
-# ---------- 颜色日志（stderr） ----------
-log_info() { echo -e "\033[0;32m[INFO]\033[0m $*" >&2; }
-log_warn() { echo -e "\033[0;33m[WARN]\033[0m $*" >&2; }
-log_err()  { echo -e "\033[0;31m[ERROR]\033[0m $*" >&2; }
-log_ok()   { echo -e "\033[0;32m[OK]\033[0m $*" >&2; }
-
 # ---------- root 检测 ----------
+# 留在本文件：${VP_EUID} 覆盖钩子（测试 mock root）+ 工具特有报错文案
 require_root() {
   if [[ ${VP_EUID:-$EUID} -ne 0 ]]; then
     log_err "需要 root 权限（读写 /etc、安装 systemd timer）。"

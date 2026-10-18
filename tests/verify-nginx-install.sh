@@ -462,13 +462,16 @@ detect_pkg_mgr
 chk "无 apk 时选 apt-get"         "[[ \"\$PRIO2\" == 'apt-get' ]]"
 # 同类缺陷不得在其他工具里复发（docker-install / vps-init）
 BADMGR="$(grep -lE 'command -v (apk|apt-get|dnf|yum) +>/dev/null 2>&1 && mgr=' \
-          "${REPO}"/utils/*/lib/common.sh "${REPO}"/web/*/lib/common.sh 2>/dev/null | tr '\n' ' ')"
+          "${REPO}"/lib/core.sh "${REPO}"/utils/*/lib/common.sh "${REPO}"/web/*/lib/common.sh \
+          "${REPO}"/proxy/*/lib/common.sh "${REPO}"/backup/*/lib/*.sh 2>/dev/null | tr '\n' ' ')"
 chk "全仓库无「最后命中赢」写法"  "[[ -z \"\$BADMGR\" ]]"
+# ⚠️ 扫描面必须覆盖 lib/core.sh：detect_pkg_mgr 的实现已统一到那里。
+#    漏了它，本守卫会变成「扫不到文件 → 恒 PASS」的假绿（2026-10-19 抽取时同步）。
 # 交互终端判据：`[[ -r /dev/tty ]]` 是**权限位判定**，无控制终端时同样为真 →
 # 直接 read 报 "/dev/tty: No such device or address"（2026-09-18 真机实测）。
 # 全仓库必须统一用 has_ctty()（真打开一次）。只扫非注释行（说明文字里会引用旧写法）。
 TTYGUARD="$(grep -rlE '^[[:space:]]*[^#[:space:]].*\[\[ *-r +/dev/tty *\]\]' \
-            "${REPO}"/utils/*/lib/common.sh "${REPO}"/web/*/lib/common.sh \
+            "${REPO}"/lib/core.sh "${REPO}"/utils/*/lib/common.sh "${REPO}"/web/*/lib/common.sh \
             "${REPO}"/bench/*/*.sh "${REPO}"/monitor/*/*.sh \
             "${REPO}"/proxy/*/*.sh "${REPO}"/install.sh 2>/dev/null | tr '\n' ' ')"
 chk "全仓库无「-r /dev/tty」伪判据" "[[ -z \"\$TTYGUARD\" ]]"
