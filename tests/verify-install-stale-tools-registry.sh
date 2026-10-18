@@ -33,9 +33,10 @@ ck(){ if [[ "$2" == "$3" ]]; then echo "  [PASS] $1"; PASS=$((PASS+1));
 #    （产品是对的，注册表 27 项与磁盘 27 个 lib 完全一致）。
 #    这类「上游加文件、下游硬编码计数」的断言每次都要人记得改两处，必然漂移。
 #    改为扫 install.sh 里 xray-deploy 那行的 extra_files 字段（第 6 字段）。
+# 计数口径 = 目标落在 lib/ 的条目（`源:目标` 取目标侧），含共享 lib/core.sh
 XLIB_N="$(grep -oP '^  "xray-deploy\|[^"]*"' "$SRC" | tr -d '"' \
           | awk -F'|' '{print $6}' | tr ' ' '\n' \
-          | grep -c 'proxy/xray-deploy/lib/.*\.sh')"
+          | awk -F: '{d=(NF>1)?$2:$1; if (d ~ /(^|\/)lib\//) c++} END{print c+0}')"
 
 # ---------- mock curl：从「远端目录」按 URL 路径取文件 ----------
 cat > "$MOCK/curl" <<'STUB'
@@ -74,6 +75,8 @@ s=s.replace('if [[ $EUID -ne 0 ]]; then', 'if false; then')
 open(dst,'w',encoding='utf-8').write(s)
 PYR
 cp -r "${REPO}/proxy/xray-deploy" "$REMOTE/proxy/"
+# 共享核心（注册表用 lib/core.sh:lib/core.sh 从仓库根取）也要在「远端」里
+cp -a "${REPO}/lib" "$REMOTE/lib"
 export REMOTE_DIR="$REMOTE"
 
 # ---------- 生成一个「已装副本」：可指定版本 / 是否含新文件 ----------

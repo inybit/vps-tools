@@ -91,19 +91,30 @@ for r in rows:
 print()
 
 # R3/R4: extra_files 双向
+# 条目两种格式（与 install.sh 的 ef_src_dst 对齐）：
+#   源路径               目标 = 源剥掉工具目录前缀（工具自己的文件）
+#   源路径:目标相对路径   目标显式指定（跨目录共享文件，如 lib/core.sh:lib/core.sh）
 print("[R3] extra_files 登记的文件都存在")
 print("[R4] 磁盘上的 .sh/.tpl 都已登记")
 for r in rows:
     if len(r) != 6:
         continue
     name, script, extra = r[0], r[1], r[5]
-    reg = set(extra.split()) if extra else set()
-    missing = sorted(p for p in reg if not os.path.isfile(os.path.join(REPO, p)))
+    entries = extra.split() if extra else []
+    srcs = [e.split(":", 1)[0] for e in entries]
+    missing = sorted(p for p in srcs if not os.path.isfile(os.path.join(REPO, p)))
     ck(f"{name}: 登记的文件都存在", not missing, f"登记但不存在: {missing}")
 
-    if not reg:
+    if not entries:
         continue
     tool_dir = os.path.dirname(os.path.join(REPO, script))
+    # 目标（相对工具目录）：有冒号取冒号后，否则 = 源相对工具目录
+    dsts = set()
+    for e in entries:
+        if ":" in e:
+            dsts.add(e.split(":", 1)[1])
+        else:
+            dsts.add(os.path.relpath(os.path.join(REPO, e), tool_dir))
     disk = set()
     for root, _dirs, files in os.walk(tool_dir):
         for fn in files:
@@ -112,8 +123,8 @@ for r in rows:
             full = os.path.join(root, fn)
             if os.path.abspath(full) == os.path.abspath(os.path.join(REPO, script)):
                 continue
-            disk.add(os.path.relpath(full, REPO))
-    unreg = sorted(disk - reg)
+            disk.add(os.path.relpath(full, tool_dir))
+    unreg = sorted(disk - dsts)
     ck(f"{name}: 磁盘文件无漏登记", not unreg, f"未登记: {unreg}")
 print()
 

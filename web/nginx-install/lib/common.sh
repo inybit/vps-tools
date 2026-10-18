@@ -2,7 +2,26 @@
 # ============================================================
 # nginx-install 公共函数库
 # 被 nginx-install.sh source；日志一律 stderr（返回值靠 stdout 捕获时不污染）
+#
+# 基础函数（日志 / 交互终端 / read_input / confirm / 包管理器）在仓库根
+# lib/core.sh —— 多工具共用一份实现，不要在本文件重复定义。
+# 本文件只留 nginx-install 特有的东西：路径/签名材料、root 检查、环境加载、发行版探测。
 # ============================================================
+
+# ---------- 共享核心（仓库内 ../../../lib，安装后与本文件同目录） ----------
+if [[ -r "${BASH_SOURCE[0]%/*}/core.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${BASH_SOURCE[0]%/*}/core.sh"
+elif [[ -r "${BASH_SOURCE[0]%/*}/../../../lib/core.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${BASH_SOURCE[0]%/*}/../../../lib/core.sh"
+else
+  echo "[ERROR] 找不到共享核心 lib/core.sh（安装不完整，请重跑安装器）" >&2
+  exit 1
+fi
+
+# confirm 的免交互开关变量名（core 里用间接展开 ${!CORE_YES_VAR} 读取）
+export CORE_YES_VAR="NI_YES"   # 供 core.sh 的 confirm 用间接展开读取
 
 # ---------- 路径与常量（环境变量可覆盖——测试/非 root 场景；产品默认不变） ----------
 : "${NI_ENV_FILE:=/etc/nginx-install.env}"                  # 配置文件（可缺省）
@@ -28,17 +47,12 @@ export NI_PIN_PRIORITY="900"
 export NI_SUPPORTED_DEBIAN="bullseye bookworm trixie"
 export NI_SUPPORTED_UBUNTU="jammy noble resolute"
 
-# ---------- 颜色日志（stderr） ----------
-log_info() { echo -e "\033[0;32m[INFO]\033[0m $*" >&2; }
-log_warn() { echo -e "\033[0;33m[WARN]\033[0m $*" >&2; }
-log_err()  { echo -e "\033[0;31m[ERROR]\033[0m $*" >&2; }
-log_ok()   { echo -e "\033[0;32m[OK]\033[0m $*" >&2; }
-
 # ---------- root 检测 ----------
 # 用户面向的命令名（wrapper 是 /usr/local/bin/nginx-install，$0 却是脚本库里的 *.sh）
 NI_SELF="${NI_SELF:-$(basename "${0:-nginx-install}")}"
 NI_SELF="${NI_SELF%.sh}"
 
+# 留在本文件：${NI_EUID} 覆盖钩子（测试 mock root）+ 工具特有报错文案
 require_root() {
   if [[ ${NI_EUID:-$EUID} -ne 0 ]]; then
     log_err "需要 root 权限（写 ${NI_KEYRING} / 仓库文件 / 安装软件包）。"
@@ -49,6 +63,7 @@ require_root() {
 
 # ---------- 配置加载（/etc/nginx-install.env，可缺省） ----------
 # 外部环境变量优先（load_env 前已 export 的值不被文件覆盖）
+# 留在本文件：NI_ 前缀与默认值是工具特有的
 load_env() {
   local _ext_vars _line
   _ext_vars="$(env | grep -E '^NI_[A-Z0-9_]+=' 2>/dev/null || true)"
@@ -66,38 +81,6 @@ load_env() {
   : "${NI_YES:=0}"
 }
 
-# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
-# 无控制终端时同样返回真（root 下 /dev/tty 恒可读），直接 read 会报
-# "/dev/tty: No such device or address"（2026-09-18 真机实测）。判据必须是「真打开一次」。
-has_ctty() { { : < /dev/tty; } 2>/dev/null; }
-
-# ---------- 交互输入（stdin 被占用时从 /dev/tty 读；返回 1 = 无交互终端） ----------
-read_input() {  # $1=提示 $2=变量名
-  local _rc=0
-  if [[ -t 0 ]]; then
-    read -r -p "$1" "$2" || _rc=1
-  elif has_ctty; then
-    # 提示单独打到 stderr（read -p 也写 stderr，但下面的 2>/dev/null 会连它一起吞掉）
-    printf '%s' "$1" >&2
-    # ⚠️ 重定向顺序不能反：2>/dev/null 必须在 < /dev/tty 之前，否则打开失败的报错先落到真实 stderr
-    read -r "$2" 2>/dev/null < /dev/tty || _rc=1
-  else
-    _rc=1
-  fi
-  if [[ $_rc -ne 0 ]]; then
-    printf -v "$2" ""    # set -u 兜底
-    return 1
-  fi
-}
-
-# 确认提示（默认 N）；返回 0 = 确认
-confirm() {  # $1=提示文本
-  [[ "${NI_YES}" == "1" ]] && return 0
-  local ans=""
-  read_input "$1 [y/N] " ans || return 1
-  [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]
-}
-
 # ---------- 发行版信息 ----------
 ni_os_id()   { sed -n 's/^ID=//p'     "${NI_OS_RELEASE}" 2>/dev/null | tr -d '"'; }
 ni_os_like() { sed -n 's/^ID_LIKE=//p' "${NI_OS_RELEASE}" 2>/dev/null | tr -d '"'; }
@@ -108,40 +91,6 @@ ni_codename() {
   echo "$c"
 }
 ni_alpine_ver() { sed -n 's/^\([0-9]*\.[0-9]*\).*/\1/p' "${NI_ALPINE_RELEASE}" 2>/dev/null | head -1; }
-
-# ---------- 包管理器探测 + 安装 ----------
-NI_PKG_MGR=""
-detect_pkg_mgr() {
-  [[ -n "$NI_PKG_MGR" ]] && { echo "$NI_PKG_MGR"; return 0; }
-  # ⚠️ 必须用 if/elif：写成 `command -v apk && mgr=apk` 顺序赋值时**最后命中的赢**
-  # （yum > dnf > apt-get > apk），与「Alpine 优先」的意图相反。
-  # 2026-09-18 harness 实测：PATH 里同时有 apk 与真实 apt-get 时，返回的是 apt-get。
-  local mgr=""
-  if command -v apk >/dev/null 2>&1; then mgr="apk"
-  elif command -v apt-get >/dev/null 2>&1; then mgr="apt-get"
-  elif command -v dnf >/dev/null 2>&1; then mgr="dnf"
-  elif command -v yum >/dev/null 2>&1; then mgr="yum"
-  fi
-  NI_PKG_MGR="$mgr"
-  echo "$mgr"
-}
-
-install_pkgs() {  # $1=包名 $2=复查命令名（默认=包名）
-  local mgr
-  mgr="$(detect_pkg_mgr)"
-  [[ -z "$mgr" ]] && { log_err "未识别包管理器（apk/apt/dnf/yum），请手动安装: $1"; return 1; }
-  local pkg="$1" check="${2:-$1}" cmd
-  case "$mgr" in
-    apk)     cmd="apk add" ;;
-    apt-get) apt-get update -qq >/dev/null 2>&1 || true; cmd="apt-get install -y -qq" ;;
-    dnf)     cmd="dnf install -y" ;;
-    yum)     cmd="yum install -y" ;;
-  esac
-  log_info "安装依赖: $pkg"
-  $cmd "$pkg" >/dev/null 2>&1 || { log_err "安装失败: $cmd $pkg（请手动安装后重试）"; return 1; }
-  command -v "$check" >/dev/null 2>&1 || { log_err "复查失败: $check 仍未安装"; return 1; }
-  return 0
-}
 
 # 写文件（内容相同则跳过，保证幂等且不制造无谓 mtime 变化）
 ni_write_if_changed() {  # $1=路径 $2=内容

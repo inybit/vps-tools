@@ -105,7 +105,7 @@ sudo bash install.sh install vnstat-monitor
 | [docker-install](utils/docker-install/README.md) | utils | Docker 官方源安装 + **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker)，固定版本 + sha256 校验）+ 非暴露模式 + 非 root 管理 + 权限体检 | curl, iptables, ufw | 多文件（8 lib） |
 | [nginx-install](web/nginx-install/README.md) | web | nginx 官方源安装（stable/mainline）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 摘要）+ apt Pin-Priority 900 + 体检 | curl, gnupg/openssl, apt/dnf/apk | 多文件（6 lib） |
 | [vps-bench](bench/vps-bench/README.md) | bench | 节点测速：NodeQuality / TcpQuality 二选一（第三方脚本封装，执行前明示来源） | curl | 单文件 |
-| [vps-backup](backup/vps-backup/README.md) | backup | **restic + rclone(GDrive) 备份与灾难恢复**：core/data 分层；保留策略 forget+prune；每周完整性抽查；**凭证不入包**；connect/init 严格分离；**repo 密码引导**；remote 名分态诊断；Telegram 失败告警；自动生成恢复 runbook | restic, rclone（自带 sha256 校验安装）, curl | 多文件（16 lib） |
+| [vps-backup](backup/vps-backup/README.md) | backup | **restic + rclone(GDrive) 备份与灾难恢复**：core/data 分层；保留策略 forget+prune；每周完整性抽查；**凭证不入包**；connect/init 严格分离；**repo 密码引导**；remote 名分态诊断；Telegram 失败告警；自动生成恢复 runbook | restic, rclone（自带 sha256 校验安装）, curl | 多文件（15 lib） |
 
 **按域索引**：
 
@@ -124,6 +124,9 @@ sudo bash install.sh install vnstat-monitor
 vps-tools/
 ├── install.sh              # 一键安装/更新/卸载器（工具注册表在文件头 TOOLS）
 ├── README.md               # 本文件：安装器 + 仓库结构 + 开发约定
+├── lib/
+│   └── core.sh             # 多工具共享核心：日志 / 交互终端 / read_input / confirm /
+│                           #   包管理器探测与安装（各工具的 lib/common.sh source 它）
 ├── monitor/                # 监控类（流量/资源/服务状态）
 │   └── vnstat-monitor/
 │       ├── README.md
@@ -133,7 +136,7 @@ vps-tools/
 │   └── xray-deploy/
 │       ├── README.md
 │       ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-│       └── lib/                    # 25 模块（common/service/fallback/keys/registry/
+│       └── lib/                    # 27 模块（common/service/fallback/keys/registry/
 │                                   #   client-*/inbound/state/outbound/routing/chain/
 │                                   #   proto-*/cmd-*/globalping/usage…）
 ├── web/                    # Web 服务类
@@ -163,7 +166,7 @@ vps-tools/
 │   └── vps-backup/
 │       ├── README.md
 │       ├── vps-backup.sh           # 入口
-│       ├── lib/                    # common/interact/pkg/restic/remote/exclude/paths/deps/
+│       ├── lib/                    # common/pkg/restic/remote/exclude/paths/deps/
 │       │                           #   repo/backup/retention/restore/timer/status/usage
 │       └── templates/vps-backup.env.example
 ├── scripts/
@@ -238,6 +241,10 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 - **定时调度**：统一用 systemd timer（工具 `setup` 子命令管理），不使用 crontab
 - **配置**：`/etc/<tool>.env`（600 权限，模板含 `${PLACEHOLDER}` 占位符，真实密钥本机填写）
 - **架构规约**：单文件 ≤200 行；超出必须拆分（视图/逻辑解耦，工具函数入 `lib/`）
+- **共享代码**：多工具逐字相同的函数放仓库根 `lib/core.sh`，各工具 `lib/common.sh`
+  只 `source` 它、**不要复制**。只收「逐字相同」的；带工具特有策略的（`require_root`
+  的 EUID mock 钩子、`load_env` 的 env 前缀、报错文案）留在各工具内。
+  新增共享文件要在注册表写 `源:目标`（如 `lib/core.sh:lib/core.sh`）
 - **脱敏铁律**：任何密钥/令牌一律 `${PLACEHOLDER}`，真实值只在本机 `/etc/*.env`
 - **环境变量导出**：从 env 文件读取的变量若需传给子进程，必须写
   `export VAR="$VAL"`；**裸 `export VAR` 只标记已存在的变量，不会赋值**

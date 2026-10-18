@@ -2,7 +2,26 @@
 # ============================================================
 # vps-init 公共函数库
 # 被 vps-init.sh source；日志一律输出到 stderr（铁律：返回值靠 stdout 捕获时不污染）
+#
+# 基础函数（日志 / 交互终端 / read_input / confirm / 包管理器）在仓库根
+# lib/core.sh —— 多工具共用一份实现，不要在本文件重复定义。
+# 本文件只留 vps-init 特有的东西：路径默认值、root 检查、环境加载、端口/状态函数。
 # ============================================================
+
+# ---------- 共享核心（仓库内 ../../../lib，安装后与本文件同目录） ----------
+if [[ -r "${BASH_SOURCE[0]%/*}/core.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${BASH_SOURCE[0]%/*}/core.sh"
+elif [[ -r "${BASH_SOURCE[0]%/*}/../../../lib/core.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${BASH_SOURCE[0]%/*}/../../../lib/core.sh"
+else
+  echo "[ERROR] 找不到共享核心 lib/core.sh（安装不完整，请重跑安装器）" >&2
+  exit 1
+fi
+
+# confirm 的免交互开关变量名（core 里用间接展开 ${!CORE_YES_VAR} 读取）
+export CORE_YES_VAR="VPS_INIT_YES"   # 供 core.sh 的 confirm 用间接展开读取
 
 # 路径默认值（环境变量可覆盖——测试/非 root 场景；产品默认不变）
 : "${VPS_INIT_ENV_FILE:=/etc/vps-init.env}"        # 配置文件（可缺省）
@@ -11,12 +30,8 @@
 VPS_INIT_DROPIN="${VPS_INIT_CONF_D}/50-vps-init.conf"
 : "${VPS_INIT_F2B_JAIL:=/etc/fail2ban/jail.local}"  # fail2ban jail.local 路径
 
-# ---------- 颜色日志（stderr） ----------
-log_info() { echo -e "\033[0;32m[INFO]\033[0m $*" >&2; }
-log_warn() { echo -e "\033[0;33m[WARN]\033[0m $*" >&2; }
-log_err()  { echo -e "\033[0;31m[ERROR]\033[0m $*" >&2; }
-
 # ---------- root 检测 ----------
+# 留在本文件（不进 core）：报错文案是工具特有的，且 core 不该知道 /etc/ssh 之类路径
 require_root() {
   if [[ $EUID -ne 0 ]]; then
     log_err "需要 root 权限（写入 /etc/ssh、/etc/fail2ban、/etc/ufw 等）。"
@@ -26,6 +41,7 @@ require_root() {
 }
 
 # ---------- 配置加载（/etc/vps-init.env，可缺省） ----------
+# 留在本文件：环境变量前缀（VPS_INIT_/SSH_PORT_）与默认值是工具特有的
 # shellcheck disable=SC1090
 load_env() {
   # 外部环境变量优先：env 文件（含模板空值）不得覆盖外部传入值（2026-08-16 真机）
@@ -44,73 +60,6 @@ load_env() {
   : "${VPS_INIT_SKIP_USER:=0}"
   : "${VPS_INIT_DISABLE_ROOT:=0}"
   : "${VPS_INIT_YES:=0}"
-}
-
-# 是否真有控制终端可交互。⚠️ 不能用 [[ -r /dev/tty ]] —— 那是**权限位判定**，
-# 无控制终端时同样返回真，直接 read 会报 "/dev/tty: No such device or address"
-# （2026-09-18 真机实测）。判据必须是「真打开一次」。
-has_ctty() { { : < /dev/tty; } 2>/dev/null; }
-
-# ---------- 交互输入（stdin 被占用时从 /dev/tty 读；返回 1 = 无交互终端） ----------
-read_input() {  # $1=提示 $2=变量名
-  local _rc=0
-  if [[ -t 0 ]]; then
-    read -r -p "$1" "$2" || _rc=1
-  elif has_ctty; then
-    printf '%s' "$1" >&2
-    # ⚠️ 2>/dev/null 必须在 < /dev/tty 之前（顺序反了报错会漏到 stderr）
-    read -r "$2" 2>/dev/null < /dev/tty || _rc=1
-  else
-    _rc=1
-  fi
-  if [[ $_rc -ne 0 ]]; then
-    printf -v "$2" ""    # set -u 兜底
-    return 1
-  fi
-}
-
-# 确认提示（默认 N）；返回 0 = 确认
-confirm() {  # $1=提示文本
-  [[ "${VPS_INIT_YES}" == "1" ]] && return 0
-  local ans=""
-  read_input "$1 [y/N] " ans || return 1
-  [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]
-}
-
-# ---------- 包管理器探测 + 安装 ----------
-DETECTED_PKG_MGR=""
-detect_pkg_mgr() {
-  if [[ -n "$DETECTED_PKG_MGR" ]]; then echo "$DETECTED_PKG_MGR"; return 0; fi
-  # ⚠️ 必须用 if/elif：写成 `command -v apk && mgr=apk` 顺序赋值时**最后命中的赢**
-  # （yum > dnf > apt-get > apk），与「Alpine 优先」的意图相反。
-  # 2026-09-18 nginx-install harness 实测：PATH 里同时有 apk 与真实 apt-get 时返回 apt-get。
-  local mgr=""
-  if command -v apk >/dev/null 2>&1; then mgr="apk"
-  elif command -v apt-get >/dev/null 2>&1; then mgr="apt-get"
-  elif command -v dnf >/dev/null 2>&1; then mgr="dnf"
-  elif command -v yum >/dev/null 2>&1; then mgr="yum"
-  fi
-  DETECTED_PKG_MGR="$mgr"
-  echo "$mgr"
-}
-
-install_pkgs() {  # $1=包名 $2=复查命令名（默认=包名；如 fail2ban 包无同名命令）
-  local mgr
-  mgr="$(detect_pkg_mgr)"
-  [[ -z "$mgr" ]] && { log_err "未识别包管理器（apk/apt/dnf/yum），请手动安装: $1"; return 1; }
-  local pkg="$1" check="${2:-$1}"
-  local cmd
-  case "$mgr" in
-    apk)     cmd="apk add" ;;
-    apt-get) apt-get update -qq >/dev/null 2>&1 || true; cmd="apt-get install -y -qq" ;;
-    dnf)     cmd="dnf install -y" ;;
-    yum)     cmd="yum install -y" ;;
-  esac
-  log_info "安装依赖: $pkg"
-  $cmd "$pkg" >/dev/null 2>&1 || { log_err "安装失败: $cmd $pkg（请手动安装后重试）"; return 1; }
-  # 装后复查（用命令名，包名可能无同名命令）
-  command -v "$check" >/dev/null 2>&1 || { log_err "复查失败: $check 仍未安装"; return 1; }
-  return 0
 }
 
 # ---------- 随机高位端口（SSH_PORT_MIN~SSH_PORT_MAX） ----------

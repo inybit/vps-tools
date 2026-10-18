@@ -368,6 +368,8 @@ MUT_ROOT="${TMP}/mut-repo"
 mkdir -p "$MUT_ROOT"
 cp -a "${REPO}/utils" "${MUT_ROOT}/utils"
 cp -a "${REPO}/tests" "${MUT_ROOT}/tests"
+# 共享核心（utils/vps-init/lib/common.sh 会 source ../../../lib/core.sh）
+cp -a "${REPO}/lib" "${MUT_ROOT}/lib"
 MUT_TOOL="${MUT_ROOT}/utils/vps-init"
 
 # shellcheck disable=SC2016  # 下面 sed 表达式有意用单引号：要匹配字面 $pubkey/$mode/$username

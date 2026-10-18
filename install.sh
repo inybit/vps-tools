@@ -36,7 +36,7 @@ set -euo pipefail
 #    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
 #    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
 #    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.15.0"
+VPS_TOOLS_VERSION="1.16.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -200,12 +200,12 @@ ensure_tarball() {  # $1=ref
 #   bench/     测试类（测速/基准）
 TOOLS=(
   "vnstat-monitor|monitor/vnstat-monitor/vnstat-monitor.sh|monitor/vnstat-monitor/vnstat-monitor.env.example|${CONFIG_DIR}/vnstat-monitor.env|setup|"
-  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/xhttp3.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-upgrade.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/usage.sh"
-  "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env||utils/vps-init/lib/common.sh utils/vps-init/lib/sshkey.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl"
+  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/xhttp3.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-upgrade.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/usage.sh lib/core.sh:lib/core.sh"
+  "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env||utils/vps-init/lib/common.sh utils/vps-init/lib/sshkey.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl lib/core.sh:lib/core.sh"
   "vps-bench|bench/vps-bench/vps-bench.sh|||nodequality|"
-  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env||utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh"
-  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env||web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh"
-  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env||backup/vps-backup/lib/common.sh backup/vps-backup/lib/interact.sh backup/vps-backup/lib/pkg.sh backup/vps-backup/lib/restic.sh backup/vps-backup/lib/cache.sh backup/vps-backup/lib/exclude.sh backup/vps-backup/lib/paths.sh backup/vps-backup/lib/deps.sh backup/vps-backup/lib/repo.sh backup/vps-backup/lib/backup.sh backup/vps-backup/lib/retention.sh backup/vps-backup/lib/restore.sh backup/vps-backup/lib/remote.sh backup/vps-backup/lib/timer.sh backup/vps-backup/lib/status.sh backup/vps-backup/lib/usage.sh"
+  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env||utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh lib/core.sh:lib/core.sh"
+  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env||web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh lib/core.sh:lib/core.sh"
+  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env||backup/vps-backup/lib/common.sh backup/vps-backup/lib/pkg.sh backup/vps-backup/lib/restic.sh backup/vps-backup/lib/cache.sh backup/vps-backup/lib/exclude.sh backup/vps-backup/lib/paths.sh backup/vps-backup/lib/deps.sh backup/vps-backup/lib/repo.sh backup/vps-backup/lib/backup.sh backup/vps-backup/lib/retention.sh backup/vps-backup/lib/restore.sh backup/vps-backup/lib/remote.sh backup/vps-backup/lib/timer.sh backup/vps-backup/lib/status.sh backup/vps-backup/lib/usage.sh lib/core.sh:lib/core.sh"
 )
 
 # ============ 辅助函数 ============
@@ -244,8 +244,23 @@ check_update() {
 }
 
 # 解析工具注册表行
-tool_field() {  # $1=行 $2=字段号(1-5)
+tool_field() {  # $1=行 $2=字段号(1-6)
   echo "$1" | cut -d'|' -f"$2"
+}
+
+# 解析 extra_files 里的单个条目 → 输出 "源路径<TAB>工具目录内相对路径"
+#   两种格式：
+#     lib/foo.sh                 源=目标，目标 = 源剥掉分类前缀（工具自己的文件）
+#     lib/core.sh:lib/core.sh    源在工具目录之外，目标显式指定（多工具共享文件）
+#   为什么需要第二种：整包快照只拷贝 <工具目录>，共享文件（仓库根 lib/core.sh）
+#   不在该目录内；逐文件回退路径也需要知道「从哪取、装到哪」两个不同的路径。
+ef_src_dst() {  # $1=条目 $2=工具目录（script_dir）
+  local ef="$1" sd="$2"
+  if [[ "$ef" == *:* ]]; then
+    printf '%s\t%s\n' "${ef%%:*}" "${ef#*:}"
+  else
+    printf '%s\t%s\n' "$ef" "${ef#"$sd"/}"
+  fi
 }
 
 find_tool() {  # $1=tool name → 输出注册表行
@@ -313,7 +328,7 @@ install_tool() {  # $1=tool line
   mkdir -p "$dest"
 
   # ---- 优先整包快照：1 次请求代替 (主脚本 + N 个附加文件) 次 ----
-  local src_root="" used_tarball=0 ef ef_rel ef_dest
+  local src_root="" used_tarball=0 ef ef_src ef_rel ef_dest
   if ensure_tarball "$ref" && [[ -n "$TARBALL_SRC" && -d "${TARBALL_SRC}/${script_dir}" ]]; then
     src_root="$TARBALL_SRC"
     log_info "下载 ${name} (ref: ${ref}): 整包快照"
@@ -322,6 +337,23 @@ install_tool() {  # $1=tool line
       rm -rf "$dest_rm"
       mv "${dest}.new" "$dest"
       used_tarball=1
+      # 跨目录共享文件（如 lib/core.sh:lib/core.sh）：整包拷贝只覆盖了工具目录，
+      # 源在工具目录之外的文件必须单独拷进来，否则装完 source 缺文件 → 启动即崩
+      local _ef _src _dst _cp_ok=1
+      for _ef in $extra_files; do
+        IFS=$'\t' read -r _src _dst < <(ef_src_dst "$_ef" "$script_dir")
+        [[ "$_src" == "$script_dir"/* ]] && continue
+        mkdir -p "$(dirname "${dest}/${_dst}")"
+        if ! cp -a "${src_root}/${_src}" "${dest}/${_dst}" 2>/dev/null; then
+          log_err "整包缺共享文件: ${_src}（注册表 extra_files 指向的文件不在该 ref 内）"
+          _cp_ok=0
+          break
+        fi
+      done
+      if [[ $_cp_ok -eq 0 ]]; then
+        rm -rf "$dest_rm"
+        return 1
+      fi
       chmod +x "${dest}/$(basename "$script")" 2>/dev/null || true
       find "$dest" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
       log_info "已安装脚本: ${dest}/$(basename "$script")（共 $(find "$dest" -type f | wc -l) 个文件）"
@@ -344,12 +376,13 @@ install_tool() {  # $1=tool line
     log_info "已安装脚本: ${dest}/$(basename "$script")"
 
     # 附加文件（多文件工具：lib/*.sh、templates/*.tpl 等，主脚本 source 依赖它们）
+    # 条目可为 `源路径:目标相对路径`（共享文件），见 ef_src_dst
     for ef in $extra_files; do
-      ef_rel="${ef#"$script_dir"/}"     # 剥掉分类前缀，保留工具目录内相对路径
+      IFS=$'\t' read -r ef_src ef_rel < <(ef_src_dst "$ef" "$script_dir")
       ef_dest="${dest}/${ef_rel}"
       mkdir -p "$(dirname "$ef_dest")"  # lib/、templates/ 子目录可能不存在（防 curl 23）
-      if ! curl -fsSL --max-time 60 "${base}/${ef}" -o "$ef_dest"; then
-        log_err "下载失败: ${ef}（附加文件，ref: ${ref}，安装不完整，已回滚）"
+      if ! curl -fsSL --max-time 60 "${base}/${ef_src}" -o "$ef_dest"; then
+        log_err "下载失败: ${ef_src}（附加文件，ref: ${ref}，安装不完整，已回滚）"
         rm -rf "$dest"
         return 1
       fi
