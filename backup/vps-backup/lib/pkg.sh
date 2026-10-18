@@ -4,36 +4,10 @@
 # 被 vps-backup.sh source（由 lib/common.sh 拆分而来，2026-09-19）
 # ============================================================
 
-# ---------- 包管理器探测 + 安装 ----------
-VP_DETECTED_PKG_MGR=""
-detect_pkg_mgr() {
-  [[ -n "$VP_DETECTED_PKG_MGR" ]] && { echo "$VP_DETECTED_PKG_MGR"; return 0; }
-  # ⚠️ 必须用 if/elif：写成 `command -v apk && mgr=apk` 顺序赋值时**最后命中的赢**
-  local mgr=""
-  if command -v apk >/dev/null 2>&1; then mgr="apk"
-  elif command -v apt-get >/dev/null 2>&1; then mgr="apt-get"
-  elif command -v dnf >/dev/null 2>&1; then mgr="dnf"
-  elif command -v yum >/dev/null 2>&1; then mgr="yum"
-  fi
-  VP_DETECTED_PKG_MGR="$mgr"
-  echo "$mgr"
-}
-
-install_pkgs() {  # $1=包名 $2=复查命令名（默认=包名）
-  local mgr pkg check cmd
-  mgr="$(detect_pkg_mgr)"
-  [[ -z "$mgr" ]] && { log_err "未识别包管理器（apk/apt/dnf/yum），请手动安装: $1"; return 1; }
-  pkg="$1"; check="${2:-$1}"
-  case "$mgr" in
-    apk)     cmd="apk add" ;;
-    apt-get) apt-get update -qq >/dev/null 2>&1 || true; cmd="apt-get install -y -qq" ;;
-    dnf)     cmd="dnf install -y" ;;
-    yum)     cmd="yum install -y" ;;
-  esac
-  log_info "安装依赖: $pkg"
-  $cmd "$pkg" >/dev/null 2>&1 || { log_err "安装失败: $cmd $pkg（请手动安装后重试）"; return 1; }
-  command -v "$check" >/dev/null 2>&1 || { log_err "复查失败: $check 仍未安装"; return 1; }
-}
+# ---------- 包管理器探测与安装 ----------
+# detect_pkg_mgr / install_pkgs 已统一到仓库根 lib/core.sh（本文件由 common.sh source）。
+# 原先这里有第 6 份实现（VP_DETECTED_PKG_MGR 缓存），2026-10-19 抽取时删除：
+# 缓存会引入「改了 PATH 仍返回旧值」的隐性 bug，而 command -v 本身极廉价。
 
 # ---------- 配置写入（原子 tmp+mv；key 已存在则替换，否则追加） ----------
 vp_env_set() {  # $1=key $2=value

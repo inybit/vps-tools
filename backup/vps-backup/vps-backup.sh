@@ -22,8 +22,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
-# shellcheck source=lib/interact.sh
-. "${SCRIPT_DIR}/lib/interact.sh"
 # shellcheck source=lib/pkg.sh
 . "${SCRIPT_DIR}/lib/pkg.sh"
 # shellcheck source=lib/restic.sh

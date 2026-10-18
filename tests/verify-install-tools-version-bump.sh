@@ -104,6 +104,7 @@ while IFS= read -r line; do
   name="$(cut -d'|' -f1 <<<"$line")"
   ef="$(cut -d'|' -f6 <<<"$line")"
   for f in $ef; do
+    f="${f%%:*}"          # `源:目标` 形式（共享文件）只看源路径是否存在
     if [[ ! -f "${REPO}/${f}" ]]; then
       echo "  [FAIL] ${name} 的 extra_files 指向不存在的文件: ${f}"
       missing=$((missing+1))

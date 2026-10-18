@@ -70,10 +70,15 @@ cert_pin_fields
 fallback_region_candidates
 _fallback_test_target
 _fallback_test_one
+confirm
+install_pkgs
+log_ok
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---
 latest_xray_tag
+detect_pkg_mgr
+install_deps
 cmd_upgrade
 build_config
 proto_add

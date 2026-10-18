@@ -81,6 +81,17 @@ n_tgz(){ grep -c 'codeload.github.com' "$LOG" 2>/dev/null || true; }
 # 逐文件 raw 请求：测试里 GH_ORIGIN 被改成 mock.invalid，故按它计数
 n_raw(){ grep -c 'mock.invalid' "$LOG" 2>/dev/null || true; }
 libn(){ ls "$SANDBOX/lib/$1/lib" 2>/dev/null | wc -l; }
+# 期望 lib 数由注册表推导，不写死数字：加一个 lib 文件就要人记得改五处断言，
+# 必然漂移（2026-10-19 加共享 lib/core.sh 时一次性踩中 5 处）。
+# 计数口径 = extra_files 里【目标落在 lib/】的条目（`源:目标` 取目标侧）。
+lib_expected(){  # $1=工具名
+  local row
+  row="$(grep -m1 "^  \"$1|" "$SRC_INSTALL")"
+  cut -d'|' -f6 <<<"$row" | tr ' ' '\n' \
+    | awk -F: '{d=(NF>1)?$2:$1; if (d ~ /(^|\/)lib\//) c++} END{print c+0}'
+}
+XLIB="$(lib_expected xray-deploy)"
+BLIB="$(lib_expected vps-backup)"
 
 echo "=== [1] 多文件工具：1 次整包请求，不再逐文件拉 raw ==="
 : > "$LOG"
@@ -88,7 +99,7 @@ rc="$(run install xray-deploy)"
 chk "退出码 0" "[[ '$rc' == '0' ]]"
 chk "整包请求恰好 1 次" "[[ \"\$(n_tgz)\" == '1' ]]"
 chk "未逐文件拉 xray-deploy 的 raw 文件" "[[ \"\$(grep -c 'mock.invalid.*proxy/xray-deploy' '$LOG')\" == '0' ]]"
-chk "27 个 lib 全部落盘" "[[ \"\$(libn xray-deploy)\" == '27' ]]"
+chk "$XLIB 个 lib 全部落盘" "[[ \"\$(libn xray-deploy)\" == '$XLIB' ]]"
 chk "主脚本可执行" "[[ -x '$SANDBOX/lib/xray-deploy/xray-deploy.sh' ]]"
 chk "日志说明走的是整包" "grep -q '整包快照' '$T/out'"
 
@@ -99,7 +110,7 @@ rc="$(run install vps-backup)"
 chk "退出码 0" "[[ '$rc' == '0' ]]"
 chk "整包请求 1 次" "[[ \"\$(n_tgz)\" == '1' ]]"
 chk "未逐文件拉 vps-backup 的 raw 文件" "[[ \"\$(grep -c 'mock.invalid.*backup/vps-backup' '$LOG')\" == '0' ]]"
-chk "vps-backup lib 全部落盘（16 个）" "[[ \"\$(libn vps-backup)\" == '16' ]]"
+chk "vps-backup lib 全部落盘（$BLIB 个）" "[[ \"\$(libn vps-backup)\" == '$BLIB' ]]"
 # 关键：install 动作里 install_self 与 install_tool 共用同一份整包 → 合计只能 1 次。
 # 若缓存失效，这里会是 2 次（install_self 一次 + install_tool 一次）。
 
@@ -109,8 +120,8 @@ echo "=== [3] VPS_TOOLS_NO_TARBALL=1 → 完全不碰 codeload ==="
 rc="$(VPS_TOOLS_NO_TARBALL=1 bash "$T/install.sh" update xray-deploy > "$T/out" 2>&1; echo $?)"
 chk "退出码 0" "[[ '$rc' == '0' ]]"
 chk "0 次整包请求" "[[ \"\$(n_tgz)\" == '0' ]]"
-chk "改为逐文件拉 raw（27+1 次）" "[[ \"\$(n_raw)\" -ge 27 ]]"
-chk "lib 仍完整" "[[ \"\$(libn xray-deploy)\" == '27' ]]"
+chk "改为逐文件拉 raw（$XLIB+1 次）" "[[ \"\$(n_raw)\" -ge $XLIB ]]"
+chk "lib 仍完整" "[[ \"\$(libn xray-deploy)\" == '$XLIB' ]]"
 
 echo
 echo "=== [4] codeload 失败 → 自动回退逐文件，结果仍完整 ==="
@@ -119,7 +130,7 @@ rc="$(MOCK_TARBALL_FAIL=1 bash "$T/install.sh" update xray-deploy > "$T/out" 2>&
 chk "退出码 0（回退成功）" "[[ '$rc' == '0' ]]"
 chk "整包尝试过 1 次" "[[ \"\$(n_tgz)\" == '1' ]]"
 chk "给出回退告警" "grep -q '回退逐文件下载' '$T/out'"
-chk "lib 仍完整（27）" "[[ \"\$(libn xray-deploy)\" == '27' ]]"
+chk "lib 仍完整（$XLIB）" "[[ \"\$(libn xray-deploy)\" == '$XLIB' ]]"
 chk "主脚本可执行" "[[ -x '$SANDBOX/lib/xray-deploy/xray-deploy.sh' ]]"
 
 echo
@@ -129,7 +140,7 @@ printf '#!/usr/bin/env bash\n# 旧版本遗留，应被清理\n' > "$SANDBOX/lib
 rc="$(run update xray-deploy)"
 chk "退出码 0" "[[ '$rc' == '0' ]]"
 chk "残留文件已清除" "[[ ! -f '$SANDBOX/lib/xray-deploy/lib/stale-removed.sh' ]]"
-chk "lib 数仍为 27（未多也未少）" "[[ \"\$(libn xray-deploy)\" == '27' ]]"
+chk "lib 数仍为 $XLIB（未多也未少）" "[[ \"\$(libn xray-deploy)\" == '$XLIB' ]]"
 
 echo
 echo "=================================================="
