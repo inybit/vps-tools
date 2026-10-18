@@ -111,7 +111,18 @@ echo ""
 echo "=== [D] 幂等：已是最新则不重复下载 ==="
 : > "$LOG"
 "$T/usr/local/bin/vps-tools" self-update > "$T/out" 2>&1
-chk "未发生文件下载（curl 无 -o 调用 = 未重复下载）" "! grep -q -- '-o ' '$LOG'"
+# ⚠️ 断言语义已随 v1.15.0 变更（2026-10-19 修）：
+#   旧断言是「curl 无任何 -o 调用 = 未重复下载」，但 install_self 判定「已是最新」
+#   之前必须拉一次远端 install.sh 算 TOOLS 清单指纹（防「版本没升但清单变了」的
+#   静默漏装，见 install.sh:556-575）。所以「零下载」不再是正确期望，正确期望是：
+#     ① 不拉整包 tarball（codeload 请求 = 0）
+#     ② install.sh 探测固定 2 次：remote_version() 版本探测 + fetch_remote_install()
+#        指纹探测；两次都只写临时文件，不写 VPS_TOOLS_CMD
+#     ③ 明确报告「已是最新」
+chk "未拉整包 tarball（无 codeload 请求）" "! grep -q 'codeload' '$LOG'"
+chk "install.sh 探测仅 2 次（版本 + 指纹），无重复拉取" \
+    "[[ \$(grep -c 'install.sh' '$LOG') -eq 2 ]]"
+chk "报告「已是最新」" "grep -q '管理命令已是最新' '$T/out'"
 chk "版本保持不变" "[[ \"\$(vof '$T/usr/local/bin/vps-tools')\" == '1.7.0' ]]"
 
 echo ""

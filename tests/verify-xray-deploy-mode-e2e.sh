@@ -64,9 +64,16 @@ wait_listen() {  # $1=端口 [超时秒]
 }
 
 XRAY_BIN="${XRAY_BIN:-/tmp/hermes-ss2022-e2e/xray}"
-[[ -x "$XRAY_BIN" ]] || { echo "需要 xray: $XRAY_BIN" >&2; exit 1; }
+# 缺依赖 = SKIP（第三态），不是 FAIL（同 verify-xray-deploy-e2e.sh 的理由）
+[[ -x "$XRAY_BIN" ]] || {
+  echo "SKIP: 需要 xray: $XRAY_BIN（可用 XRAY_BIN=... 指定）"
+  exit 0
+}
 GEO_ASSET="${GEO_ASSET:-/tmp/geodata}"
-[[ -f "${GEO_ASSET}/geosite.dat" ]] || { echo "需要 geo: $GEO_ASSET" >&2; exit 1; }
+[[ -f "${GEO_ASSET}/geosite.dat" ]] || {
+  echo "SKIP: 需要 geo 数据: $GEO_ASSET（可用 GEO_ASSET=... 指定）"
+  exit 0
+}
 
 P_RELAY=28702; P_SOCKS=28703; P_LANDING=28701; P_WEB=28704
 

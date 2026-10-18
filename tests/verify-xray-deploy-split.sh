@@ -79,7 +79,12 @@ dump_fns() {
 }
 
 # 从 dump 中提取函数名列表
-fn_names() { grep -oE '^=== [a-zA-Z_][a-zA-Z0-9_]* ===$' "$1" | sed 's/^=== //; s/ ===$//'; }
+# ⚠️ 必须排序（LC_ALL=C）后再交给 comm：comm 要求两侧输入按同一顺序排好，
+#    否则输出是垃圾。2026-10-19 实测：基线 .fn-baseline.txt 未排序 →
+#    comm -13/-23 把【同一批 9 个函数】同时报成「未预期新增」和「丢失」，
+#    套件恒 FAIL，且提示方向完全错误（让人去改白名单而不是查排序）。
+#    C locale 同时消除 declare -F|sort 与后续 sort 的排序差异（_ 与字母相对位置）。
+fn_names() { grep -oE '^=== [a-zA-Z_][a-zA-Z0-9_]* ===$' "$1" | sed 's/^=== //; s/ ===$//' | LC_ALL=C sort; }
 
 # 提取单个函数的块（含 declare -f 体）
 fn_block() {  # $1=dump文件 $2=函数名
@@ -224,9 +229,13 @@ if [[ "$body_diff" -eq 0 && -z "$removed" && -z "$unexpected_added" ]]; then
   echo
   echo "=== 结果: PASS ==="
   echo "    原函数体零改动；新增函数: ${added:-无}"
+  # 汇总行（run-all.sh 的判据）：本套件是「整体判定」型，不是逐条断言型，
+  # 故只有 1 个结论。缺了这行 run-all 会打印 'PASS ' 带空统计（2026-10-19 修）。
+  echo " PASS=1 FAIL=0"
   exit 0
 else
   echo
   echo "=== 结果: FAIL ==="
+  echo " PASS=0 FAIL=1"
   exit 1
 fi
