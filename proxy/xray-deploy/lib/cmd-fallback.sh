@@ -49,11 +49,11 @@ cmd_fallback_test() {  # $1=可选（域名 / --region <CC> / --all）；无参 
 
   case "$kind" in
     domain)
-      log_info "回落域名握手延迟测试（TLS1.3+H2+X25519+非跳转+非Cloudflare）..."
+      log_info "回落域名握手延迟测试（TLS1.3+H2+X25519+非跳转+非 CF 前置）..."
       _fallback_test_one "$value" "自定义"
       ;;
     region)
-      log_info "回落域名握手延迟测试（TLS1.3+H2+X25519+非跳转+非Cloudflare）..."
+      log_info "回落域名握手延迟测试（TLS1.3+H2+X25519+非跳转+非 CF 前置）..."
       log_info "地区: ${value}（本机所在地；跨地区请用 --all）"
       # 逐行读入，避免把多行输出拆成数组元素时丢备注
       while IFS='|' read -r dom note; do
@@ -70,7 +70,7 @@ cmd_fallback_test() {  # $1=可选（域名 / --region <CC> / --all）；无参 
       done
       ;;
     all)
-      log_info "回落域名握手延迟测试（TLS1.3+H2+X25519+非跳转+非Cloudflare）..."
+      log_info "回落域名握手延迟测试（TLS1.3+H2+X25519+非跳转+非 CF 前置）..."
       log_warn "跨地区全量模式：候选表 ${#FALLBACK_CANDIDATES[@]} 条（含 10 个地区），耗时较长"
       for line in "${FALLBACK_CANDIDATES[@]}"; do
         IFS='|' read -r dom _ _ note <<<"$line"

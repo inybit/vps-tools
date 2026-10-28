@@ -102,6 +102,16 @@ geo_timer_remove
 geo_timer_dispatch
 warp_stale_tun_tables
 warp_cleanup_stale_tun
+# 2026-10-29 CF 前置判定 + REALITY SNI 闸门（lib/cdn-detect.sh / lib/sni-check.sh）
+_ipv4_to_int
+ip_in_cidr4
+_ipv6_prefix32
+ip_in_cf_v4
+ip_in_cf_v6
+cf_front_reason
+cf_sni_gate
+check_reality_sni
+cmd_reality_check
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---
@@ -133,3 +143,5 @@ cmd_fallback_test
 cmd_uninstall
 rebuild_and_reload
 update_geo
+proto_add
+test_fallback_domain

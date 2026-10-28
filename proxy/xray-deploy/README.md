@@ -8,8 +8,8 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.16.2` |
-| 结构 | 多文件（入口 + 33 lib） |
+| 版本 | `1.17.0` |
+| 结构 | 多文件（入口 + 35 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
 | 服务 | systemd / OpenRC |
@@ -35,8 +35,9 @@ sudo xray-deploy install         首次部署向导（选 Xray 版本 → 选协
                                    版本默认最新，可选最近 10 个版本之一）
 xray-deploy info                 查看节点信息（明文 + 客户端配置片段，无需 root）
 xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 xray -test 校验并重载）
-xray-deploy fallback-test [域名]      测试回落域名握手延迟并排序（无参=全部候选）
+xray-deploy fallback-test [域名]      测试回落域名握手延迟并排序（无参=本地区候选）
 xray-deploy fallback-cn-test [域名]   回落域名中国方向可达性检测（Globalping 探针）
+xray-deploy reality-check        REALITY 的 SNI（= dest）体检：CF 前置 / TLS / 证书 / 可达性（只读）
 sudo xray-deploy update-geo [--restart]  更新 geosite/geoip（原子替换，下载异常不覆盖线上文件）
 sudo xray-deploy geo-timer install|status|remove   geo 数据每周自动更新（systemd timer）
 sudo xray-deploy upgrade [版本]  不带参数=升级到最新（失败自动回滚，含防降级）；
@@ -114,8 +115,9 @@ sudo xray-deploy upgrade            # 不带参数 = 升到最新（原行为，
 
 | 命令 | 视角 | 测什么 |
 |---|---|---|
-| `fallback-test` | VPS 本地 | TLS1.3 + H2 + X25519 + 非跳转 + 非 Cloudflare，并测握手延迟排序 |
+| `fallback-test` | VPS 本地 | TLS1.3 + H2 + X25519 + 非跳转 + 非 CF 前置，并测握手延迟排序 |
 | `fallback-cn-test` | Globalping 中国三网探针 | **中国方向可达性**（SNI/TLS 层阻断，ICMP 通不代表 HTTPS 通） |
+| `reality-check` | VPS 本地 | 存量 REALITY 的 SNI(=dest) 体检：CF 前置 / TLS1.3+H2 / 证书 SAN / dest 可达（只读） |
 
 二者互补——VPS 侧握手快但中国方向被 SNI 阻断的域名，国内用户照样连不上。
 
@@ -136,6 +138,42 @@ xray-deploy fallback-test www.example.com   # 单个域名
 > 旧版无参即整表遍历（≈1 小时，其中 90% 是跨洲白等）——**已修正为默认本地区**。
 
 部署向导侧的选型机制：**tier 升序排序 → 逐个实测 → 只收前 6 个**，展示与默认选择按握手延迟升序。
+
+### 必须排除「套了 CF」的域名（防盗刷）
+
+CF 前置的域名不能做回落 / REALITY 的 `dest`，原因不是「不推荐」，而是**流量会被盗刷**：
+
+- REALITY 对**所有**未通过鉴权的连接都原样转发到 `dest`（本工具 `dest = sni:443`）；
+- `dest` 若是 CF 域名 → 解析结果就是 CF 边缘 IP（共享 anycast 池）→ 本机变成 **CF 免费端口转发器**，
+  任何人扫到你的端口都能借道，出站流量记在你的账单上；
+- GFW 还能顺着 CF **回源取证**，拿到「这台机器在跑代理」的实锤。
+  （上游依据：XTLS/Xray-core#2360、#5807）
+
+判定用三路取并集（`lib/cdn-detect.sh`），任一命中即拒：
+
+| 信号 | 说明 | 备注 |
+|---|---|---|
+| `cf-ray` / `server: cloudflare` 响应头 | CF 边缘注入 | 与 CA 轮换无关，最权威 |
+| A/AAAA 解析结果 ∈ CF 官方段（`cloudflare.com/ips-v4\|v6`） | **盗刷通道本体** | 内嵌常量，不联网拉取 |
+| 证书签发者含 cloudflare | 历史信号 | CF 已大量改用 GTS/InCommon/Sectigo → 单靠它必漏 |
+
+> 2026-10-29 实测：候选表 121 条里 **13 条**是 CF 前置（`nationalgallery.org.uk` `caltech.edu`
+> `brown.edu` `epfl.ch` `france.fr` `elysee.fr` `waseda.jp` `ntu.edu.sg` `iras.gov.sg`
+> `uwa.edu.au` `mots.go.th` `mfa.go.th` `tmd.go.th`），旧实现（只 grep 签发者）命中 **0 条**。
+> 现由 `test_fallback_domain` 统一拒绝，`fallback-test` 里会直接看到 `✗ Cloudflare 前置（…）`。
+
+**REALITY 的 SNI 同样过闸**：`select_fallback_domain` 的自有域名分支、候选最终确认、
+`protocol add` 写 state 前都会跑 `check_reality_sni`
+（CF 闸门 + TLS1.3/H2/X25519 + 证书 SAN 覆盖 + dest 可达）。
+确需在知情前提下强制使用套 CF 的域名：`XRAY_DEPLOY_ALLOW_CDN_SNI=1`（打印警告后放行）。
+
+**存量机器体检**（只读，不改配置；不合格时按提示改 SNI）：
+
+```bash
+sudo xray-deploy reality-check
+# ❌ r-01  sni=www.waseda.jp — Cloudflare 前置（cf-ray 响应头、A 104.16.221.156 ∈ CF 段）…
+#    修复: sudo xray-deploy protocol edit r-01 → 选「改 SNI」重选回落域名
+```
 
 > **数据出境确认（`fallback-cn-test` 专属）**：Globalping 是第三方公共 API，待测域名会被提交出境
 > 并留存在其**公开测量记录**中（提交内容仅域名 + 请求类型，不含服务器 IP / 密钥 / 节点信息）。
@@ -288,6 +326,12 @@ sudo xray-deploy update-geo [--restart]           # 手动更新；--restart = �
   `SO_REUSEPORT` 随机分发、SNI 不参与分流 → 实测 30% 串台
   （`REALITY: received real certificate (potential MITM or redirection)`）。
   且 `xray -test` 不绑定端口，**同端口冲突在 `-test` 阶段静默通过**，只有 `run` 才暴露。
+- **REALITY 的 `dest` 绝不能是套了 CF 的域名**（= 流量被盗刷）。REALITY 把未鉴权连接原样转发到
+  `dest`，CF 域名解析到 CF 边缘 IP → 本机成为 **CF 端口转发器**，出站流量被扫端口的人白嫖，
+  且 GFW 可顺着 CF 回源取证。本工具已做成硬闸门（三路判定：`cf-ray` 头 / 解析 IP ∈ CF 段 /
+  证书签发者），`fallback-test`、部署向导、`protocol add` 全部拒绝；存量机器用
+  `xray-deploy reality-check` 体检。⚠️ 旧实现只 grep 证书签发者，CF 改用 GTS/InCommon/Sectigo
+  签证书后**实测 13/121 条 CF 候选全漏判**（含 `waseda.jp` / `ntu.edu.sg`）。
 - **hy2 的 auth 位置与 outbound 相反**：inbound 在 `settings.clients[].auth`，
   outbound 在 `hysteriaSettings.auth`（写错 `xray -test` 通过但 QUIC 握手失败）。
 - **hy2 自签证书：客户端用证书指纹 pin，不要用 insecure**。自签时 `insecure` /
@@ -348,9 +392,9 @@ sudo xray-deploy update-geo [--restart]           # 手动更新；--restart = �
 ```
 proxy/xray-deploy/
 ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-└── lib/                    # 33 模块
+└── lib/                    # 35 模块
     ├── common.sh service.sh state.sh xray-bin.sh keys.sh registry.sh
-    ├── fallback-data.sh fallback.sh globalping.sh
+    ├── cdn-detect.sh fallback-data.sh fallback.sh sni-check.sh globalping.sh
     ├── inbound.sh outbound.sh routing.sh chain.sh chain-info.sh ss2022.sh
     ├── proto-wizard.sh xhttp3.sh proto-crud.sh proto-edit.sh
     ├── client-mihomo.sh client-singbox.sh client-ss2022.sh
@@ -375,3 +419,4 @@ bash tests/run-all.sh xray      # 全部 xray 相关套件
 | `verify-xray-deploy-mode-e2e.sh` | 分流模式端到端（真实 xray 决策日志） |
 | `verify-xray-deploy-split.sh` | 拆分等价性（函数体逐字对比基线） |
 | `verify-xray-deploy-geo-timer.sh` | geo 每周自动更新（timer unit / systemctl 序列 / 原子替换与回滚，55 断言） |
+| `verify-xray-deploy-cf-sni.sh` | CF 前置三路判定 + REALITY SNI 闸门（48 断言：IP 运算 / 三路信号各自命中 / 逃逸阀 / 存量体检） |

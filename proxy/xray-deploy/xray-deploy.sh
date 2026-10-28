@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.16.2"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.17.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,8 +48,10 @@ XRAY_ATOM="https://github.com/XTLS/Xray-core/releases.atom"
 LIB_DIR="${SCRIPT_DIR}/lib"
 . "${LIB_DIR}/common.sh"
 . "${LIB_DIR}/service.sh"
+. "${LIB_DIR}/cdn-detect.sh"
 . "${LIB_DIR}/fallback-data.sh"
 . "${LIB_DIR}/fallback.sh"
+. "${LIB_DIR}/sni-check.sh"
 . "${LIB_DIR}/keys.sh"
 . "${LIB_DIR}/xray-bin.sh"
 . "${LIB_DIR}/registry.sh"
@@ -91,6 +93,7 @@ case "$CMD" in
   config)        cmd_config "${2:-show}" ;;
   fallback-test) cmd_fallback_test "${2:-}" ;;
   fallback-cn-test) cmd_fallback_cn_test "${2:-}" ;;
+  reality-check) cmd_reality_check ;;
   update-geo)    shift || true; update_geo "$@" ;;
   geo-timer)     shift || true; geo_timer_dispatch "$@" ;;
   upgrade)       cmd_upgrade "${2:-}" ;;
@@ -123,7 +126,7 @@ case "$CMD" in
     warp_dispatch "$@"
     ;;
   menu) : ;;  # 走交互菜单
-  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/update-geo/geo-timer/upgrade/status/restart/uninstall/protocol/chain/warp）" ;;
+  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/reality-check/update-geo/geo-timer/upgrade/status/restart/uninstall/protocol/chain/warp）" ;;
 esac
 
 # ============ 交互菜单 ============

@@ -100,7 +100,7 @@ sudo bash install.sh install vnstat-monitor
 | 工具 | 域 | 用途 | 依赖 | 结构 |
 |---|---|---|---|---|
 | [vnstat-monitor](monitor/vnstat-monitor/README.md) | monitor | vnStat + Telegram 流量监控：进度条 / 偏移校准 / 熔断关机 / 无限流量模式；原地更新消息防刷屏 | vnstat, jq, curl, gawk, iproute2 | 单文件 |
-| [xray-deploy](proxy/xray-deploy/README.md) | proxy | Xray 一键部署：5 协议注册表；回落域名双检（VPS 握手 + Globalping 中国方向）；中转+落地链式代理与分流；WARP 回国出站（WireGuard）；geo 数据每周自动更新（systemd timer）；生成 mihomo/sing-box 客户端节点 | curl, unzip, jq, openssl | 多文件（33 lib） |
+| [xray-deploy](proxy/xray-deploy/README.md) | proxy | Xray 一键部署：5 协议注册表；回落域名双检（VPS 握手 + Globalping 中国方向）+ CF 前置排除（防盗刷）；中转+落地链式代理与分流；WARP 回国出站（WireGuard）；geo 数据每周自动更新（systemd timer）；生成 mihomo/sing-box 客户端节点 | curl, unzip, jq, openssl | 多文件（35 lib） |
 | [vps-init](utils/vps-init/README.md) | utils | 一键初始化 VPS：DD 重装（全自动续跑）/ 时区 / BBR / 用户 + sudo + SSH 公钥注入 / 禁密码 + 随机高位端口 / Fail2Ban / UFW | curl, openssh-server | 多文件（8 lib + 2 tpl） |
 | [docker-install](utils/docker-install/README.md) | utils | Docker 官方源安装 + **Docker×UFW 共存加固**（委托 [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker)，固定版本 + sha256 校验）+ 非暴露模式 + 非 root 管理 + 权限体检 | curl, iptables, ufw | 多文件（8 lib） |
 | [nginx-install](web/nginx-install/README.md) | web | nginx 官方源安装（stable/mainline）+ **签名密钥 fail-closed 校验**（apt 指纹 / apk 摘要）+ apt Pin-Priority 900 + 体检 | curl, gnupg/openssl, apt/dnf/apk | 多文件（6 lib） |
@@ -136,9 +136,9 @@ vps-tools/
 │   └── xray-deploy/
 │       ├── README.md
 │       ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-│       └── lib/                    # 33 模块（common/service/fallback/keys/registry/
-│                                   #   client-*/inbound/state/outbound/routing/chain/
-│                                   #   proto-*/cmd-*/geo-*/warp-*/globalping/usage…）
+│       └── lib/                    # 35 模块（common/service/fallback/cdn-detect/sni-check/
+│                                   #   keys/registry/client-*/inbound/state/outbound/routing/
+│                                   #   chain/proto-*/cmd-*/geo-*/warp-*/globalping/usage…）
 ├── web/                    # Web 服务类
 │   └── nginx-install/
 │       ├── README.md
