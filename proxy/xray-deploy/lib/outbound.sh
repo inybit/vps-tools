@@ -25,6 +25,36 @@ gen_outbound_ss2022() {
     }'
 }
 
+# 生成 WARP 出站（WireGuard）
+# ⚠️ 字段名以官方文档 config/outbounds/wireguard 为准（2026-10-28 核对）：
+#    secretKey / address[] / peers[].{endpoint,publicKey,allowedIPs} / mtu / remoteDNS[]
+# ⚠️ 隧道内目标必须是 IP：域名由 remoteDNS 在隧道内解析（= profile 的 DNS 行），
+#    故 routing 命中 geosite:cn 的域名会先被本 outbound 内的 DNS 解析成 IP。
+# ⚠️ noKernelTun / reserved 仅在 state 里显式存在时才写（默认省略 = Xray 自动检测）。
+# $1=tag $2=state.json 的 .warp JSON
+gen_outbound_wireguard() {
+  local tag="$1" w="$2"
+  jq -n --arg tag "$tag" --argjson w "$w" '
+    {
+      tag: $tag, protocol: "wireguard",
+      settings: (
+        {
+          secretKey: $w.private_key,
+          address: $w.address,
+          peers: [{
+            endpoint: $w.endpoint,
+            publicKey: $w.public_key,
+            allowedIPs: ($w.allowed_ips // ["0.0.0.0/0", "::/0"])
+          }],
+          mtu: ($w.mtu // 1280)
+        }
+        + (if (($w.dns // []) | length) > 0 then { remoteDNS: $w.dns } else {} end)
+        + (if ($w.reserved // null) != null then { reserved: $w.reserved } else {} end)
+        + (if ($w.no_kernel_tun // null) != null then { noKernelTun: $w.no_kernel_tun } else {} end)
+      )
+    }'
+}
+
 # 落地 outbound 的 tag 命名（固定值，便于 routing 引用与 info 展示）
 LANDING_OUTBOUND_TAG="landing"
 

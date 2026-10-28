@@ -67,8 +67,10 @@ ck "routing 生成在 routing.sh（含 catch-all）" \
   "$(grep -c 'LANDING_OUTBOUND_TAG' "${TOOL}/lib/routing.sh")" "2"
 ck "inbound.sh 不再硬编码 routing" \
   "$(grep -c 'geosite:category-ads-all' "${TOOL}/lib/inbound.sh")" "0"
-ck "菜单含链路入口" \
-  "$(grep -c '中转 + 落地（链路）' "$MAIN")" "1"
+# ⚠️ 菜单正文 2026-10-28 抽到 lib/menu.sh（入口文件超 200 行约定），
+#    断言改为「入口或任一 lib 里恰好 1 处」，菜单搬家不再假红。
+ck "菜单含链路入口（入口或 lib/）" \
+  "$(grep -l '中转 + 落地（链路）' "$MAIN" "${TOOL}"/lib/*.sh 2>/dev/null | wc -l)" "1"
 echo
 
 # ---------- 准备：mock xray（生成阶段用）+ 真 xray（校验阶段用） ----------

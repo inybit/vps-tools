@@ -11,7 +11,10 @@
 #   --dry-run 只打印将要做的事，不写任何东西
 #
 # 版本语义（双轴，互不影响）:
-#   安装器版本 = install.sh 的 VPS_TOOLS_VERSION，改了安装器行为才递增
+#   安装器版本 = install.sh 的 VPS_TOOLS_VERSION，改了安装器行为**或 TOOLS 清单**才递增
+#                （TOOLS 清单是本文件里的数据，改它 = 文件内容变了；同一版本号对应两份
+#                  不同内容会让 --ref 回滚拿到的东西不确定。守卫见
+#                  tests/verify-install-tools-version-bump.sh）
 #   工具版本   = 各工具主脚本里的 VERSION 变量，改了该工具才递增
 #   发布哪个轴就打哪个轴的 tag，另一个轴不动。
 #

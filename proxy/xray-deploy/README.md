@@ -187,6 +187,43 @@ xray-deploy chain mode                        查看当前模式（只读，无�
 - 未知 mode 回退 `all` 并告警（fail-safe 到「走落地」而非静默直出）
 - ⚠️ 新增 geosite 标签前须验证存在：`curl raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/<tag>.yaml`
 
+## WARP 回国出站（WireGuard，1.14.0+）
+
+默认回国流量（`geosite:cn` + `geoip:cn`）走 `blackhole`。导入
+[wgcf](https://github.com/ViRb3/wgcf) 生成的 `wgcf-profile.conf` 后，这两条规则的目标出站改为
+`wireguard` 出站（tag `warp`）；广告 / BT / 私网三条 block 不动。
+
+```bash
+wgcf register && wgcf generate                 # 任意机器，得到 wgcf-profile.conf
+sudo xray-deploy warp setup                    # 交互：读文件 或 直接粘贴（单独一行 EOF 结束）
+sudo xray-deploy warp setup /root/wgcf-profile.conf
+cat wgcf-profile.conf | sudo xray-deploy warp setup -
+sudo xray-deploy warp show                     # 私钥打码（只露末 4 位）
+sudo xray-deploy warp test [--net]             # 配置层自检；--net 临时探测真实出口
+sudo xray-deploy warp remove                   # 回到 blackhole
+```
+
+profile → 出站字段映射：
+
+| profile 行 | Xray settings | 说明 |
+|---|---|---|
+| `PrivateKey` | `secretKey` | 只存 `state.json`（600）；任何输出只露末 4 位 |
+| `Address` | `address[]` | 缺 `/32`、`/128` 自动补 |
+| `DNS` | `remoteDNS[]` | 隧道内目标**必须是 IP**，域名靠它解析 |
+| `MTU` | `mtu` | 缺省 1280，限 576–1500 |
+| `PublicKey` | `peers[0].publicKey` | |
+| `AllowedIPs` | `peers[0].allowedIPs` | |
+| `Endpoint` | `peers[0].endpoint` | |
+
+- **内核 TUN 不写进配置**：省略 `noKernelTun` = Xray 自动检测（有 `CAP_NET_ADMIN` 用内核 TUN，
+  否则进程内 gVisor）。Xray 文档明确警告自动检测在部分 LXC 上会误判（有权限却用不了 TUN，
+  出站静默失败）→ 那时加 `--no-tun` 重新导入即可强制 gVisor。
+  内核 TUN 占 IPv6 路由表 10230，同机第二个 wireguard 出站顺延 10231。
+- `reserved`（部分 WARP 账号需要由 client_id 派生的 3 字节）不在 profile 里，
+  需要时 `warp setup ... --reserved 1,2,3`。
+- 多 `[Peer]` 直接报错，不猜。
+- `warp` 与 `chain` 正交：分流模式照旧，回国流量始终先命中 warp 规则。
+
 ## 客户端兼容性硬约束
 
 - **Xray ≥ v26.9.8 的 REALITY 服务端要求客户端 ClientHello 携带 X25519MLKEM768**
@@ -235,8 +272,12 @@ xray-deploy chain mode                        查看当前模式（只读，无�
 - **升级/版本查询**：`api.github.com/.../releases/latest` 会漏掉 prerelease，
   而 Xray 从 v26.3.23 起所有 release 都标 prerelease → 该端点恒返回旧版。
   工具已改用 `/releases?per_page=5` + 语义化版本比较（含防降级）。
-- **配置原子替换**：`config.json.tmp` + `xray -test` 校验通过才 `mv` 生效，
-  校验失败保留线上配置。
+- **配置原子替换**：`config.tmp.json` + `xray -test` 校验通过才 `mv` 生效，校验失败保留线上配置。
+  ⚠️ 临时文件**必须保留 `.json` 扩展名**：Xray v26.10.21 起配置加载器只按扩展名判格式，
+  `-format=json` 不再覆盖它 → 旧的 `config.json.tmp` 写法在该版本报
+  `unsupported config file extension`，导致**任何 rebuild 都校验失败**
+  （`protocol add/edit`、`chain mode`、`warp setup` 全部卡住）。
+  实测：v26.9.9 通过、v26.10.21 失败（1.14.0 起已改为 `config.tmp.json`）。
 
 ### vless-xhttp3-nginx 专属
 
