@@ -197,7 +197,7 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 | `verify-docker-install.sh` | 59 | docker-install 回归（mock） |
 | `verify-install-noexec.sh` | 72 | 安装器契约：**不自动执行工具命令** + 指引子命令真实性 + README 索引完整性（mock，离线可跑） |
 | `verify-xray-deploy-routing.sh` | 56 | xray 分流规则 |
-| `verify-xray-deploy-warp.sh` | 60 | WARP 回国出站（profile 解析 / 出站形态 / 路由三态 / 私钥不外泄） |
+| `verify-xray-deploy-warp.sh` | 77 | WARP 回国出站（profile 解析 / 出站形态 / 路由三态 / 私钥不外泄 / IPv6 裁剪） |
 | `verify-xray-deploy-fallback-scope.sh` | 31 | 回落候选范围（默认本地区，跨地区需 --all） |
 | `verify-xray-deploy-chain.sh` | 46 | xray 链式代理 |
 | `verify-vps-backup-e2e.sh` | 48 | vps-backup 真机 E2E（需 restic+rclone，local backend 模拟 GDrive，零出境） |

@@ -187,7 +187,7 @@ xray-deploy chain mode                        查看当前模式（只读，无�
 - 未知 mode 回退 `all` 并告警（fail-safe 到「走落地」而非静默直出）
 - ⚠️ 新增 geosite 标签前须验证存在：`curl raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/<tag>.yaml`
 
-## WARP 回国出站（WireGuard，1.14.0+）
+## WARP 回国出站（WireGuard，1.15.0+）
 
 默认回国流量（`geosite:cn` + `geoip:cn`）走 `blackhole`。导入
 [wgcf](https://github.com/ViRb3/wgcf) 生成的 `wgcf-profile.conf` 后，这两条规则的目标出站改为
@@ -198,6 +198,7 @@ wgcf register && wgcf generate                 # 任意机器，得到 wgcf-prof
 sudo xray-deploy warp setup                    # 交互：读文件 或 直接粘贴（单独一行 EOF 结束）
 sudo xray-deploy warp setup /root/wgcf-profile.conf
 cat wgcf-profile.conf | sudo xray-deploy warp setup -
+sudo xray-deploy warp setup /root/wgcf-profile.conf --ipv6 on   # 强制保留 IPv6
 sudo xray-deploy warp show                     # 私钥打码（只露末 4 位）
 sudo xray-deploy warp test [--net]             # 配置层自检；--net 临时探测真实出口
 sudo xray-deploy warp remove                   # 回到 blackhole
@@ -221,6 +222,12 @@ profile → 出站字段映射：
   内核 TUN 占 IPv6 路由表 10230，同机第二个 wireguard 出站顺延 10231。
 - `reserved`（部分 WARP 账号需要由 client_id 派生的 3 字节）不在 profile 里，
   需要时 `warp setup ... --reserved 1,2,3`。
+- **IPv6 按本机能力自动裁剪（1.15.0+）**：`warp setup` 检测本机是否有公网 IPv6
+  （`/proc/net/if_inet6` 里存在 `2000::/3` 全局单播地址）。**没有就剔除** `address` 的 v6 项、
+  `allowedIPs` 的 `::/0`、`remoteDNS` 的 v6 DNS，并把结果记进 `state.json` 的 `.warp.ipv6`。
+  原因：无 v6 的机器上内核 TUN 加 v6 地址/路由会失败，整个 wireguard 出站起不来。
+  逃生门 `--ipv6 on`（强制保留，本机无 v6 时告警）/ `--ipv6 off`（强制剔除）；默认 `auto`。
+  旧 state 无 `.warp.ipv6` 字段时按本机实时探测（自愈），`warp show` 会标「自动（老配置）」。
 - 多 `[Peer]` 直接报错，不猜。
 - `warp` 与 `chain` 正交：分流模式照旧，回国流量始终先命中 warp 规则。
 

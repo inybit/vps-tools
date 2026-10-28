@@ -85,6 +85,44 @@ warp_parse_profile() {
       public_key: $pub, allowed_ips: $ips, endpoint: $ep }'
 }
 
+# ============ 本机 IPv6 能力与裁剪 ============
+# 本机是否有公网 IPv6（2000::/3 全局单播）→ 0=有
+# 数据源 /proc/net/if_inet6（首列 = 32 位十六进制地址，无冒号）：
+#   ::1        → 0000…0001（首字符 0）
+#   fe80::/10  → fe80…（首字符 f，链路本地）
+#   fd00::/8   → fd…（首字符 f，ULA）
+#   公网       → 2xxx / 3xxx（首字符 2 或 3）
+# 不看 disable_ipv6 / v6 默认路由：内核 TUN 需要的是「能加 v6 地址」，有公网 v6 即成立。
+# WARP_IF_INET6_FILE 仅供测试注入假数据，生产不设。
+warp_local_has_public_ipv6() {
+  local f="${WARP_IF_INET6_FILE:-/proc/net/if_inet6}"
+  [[ -r "$f" ]] || return 1
+  awk '$1 ~ /^[23]/ { f = 1 } END { exit(f ? 0 : 1) }' "$f" 2>/dev/null
+}
+
+# 剔除 v6 条目（address / dns / allowed_ips 里带 ':' 的项）→ 单行 JSON
+# remoteDNS 也要剔：隧道内没有 v6 路由，留 v6 DNS 会让域名解析失败。
+warp_strip_ipv6() {
+  jq -c '.address |= map(select(test(":") | not))
+         | .dns |= map(select(test(":") | not))
+         | .allowed_ips |= map(select(test(":") | not))' <<<"${1:-{\}}"
+}
+
+# 出站是否配置 IPv6：state 显式 .warp.ipv6 优先；缺省（1.15.0 前的老 state）按本机实时探测
+warp_ipv6_enabled() {
+  local v="auto"
+  if [[ -n "${STATE_FILE:-}" && -r "${STATE_FILE:-}" ]]; then
+    # ⚠️ 不能用 `.warp.ipv6 // "auto"`：jq 的 // 把 false 也当空值 → false 会被替换成 auto
+    v="$(jq -r 'if .warp.ipv6 == null then "auto" else (.warp.ipv6 | tostring) end' \
+           "$STATE_FILE" 2>/dev/null || echo auto)"
+  fi
+  case "$v" in
+    true)  return 0 ;;
+    false) return 1 ;;
+  esac
+  warp_local_has_public_ipv6
+}
+
 # ============ 状态与出站 ============
 warp_enabled() {
   [[ -f "${STATE_FILE:-}" ]] || return 1
@@ -94,9 +132,15 @@ warp_enabled() {
 # 从 state.json 的 .warp 生成 wireguard 出站（未启用则输出空）
 gen_warp_outbound() {
   warp_enabled || return 0
-  local w
+  local w s
   w="$(jq -c '.warp' "$STATE_FILE" 2>/dev/null || true)"
   [[ -n "$w" && "$w" != "null" ]] || return 0
+  # 本机无公网 IPv6 → 出站不配置 v6（老 state 无 .warp.ipv6 时按本机实时探测）
+  if ! warp_ipv6_enabled; then
+    if s="$(warp_strip_ipv6 "$w")" && [[ "$(jq -r '.address | length' <<<"$s")" -gt 0 ]]; then
+      w="$s"
+    fi
+  fi
   gen_outbound_wireguard "$WARP_OUTBOUND_TAG" "$w"
 }
 

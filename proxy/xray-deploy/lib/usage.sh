@@ -82,18 +82,20 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   ⚠️ 底线 block 永远保留：广告 / BT / 私网 / 国内站点（cn）
   ⚠️ 新增 geosite 标签前须 curl 验证存在（MetaCubeX geo/geosite/<tag>.yaml）
 
-WARP 回国出站（WireGuard，1.14.0+）:
+WARP 回国出站（WireGuard，1.15.0+）:
   wgcf register && wgcf generate                 在任意机器生成 wgcf-profile.conf
   sudo xray-deploy warp setup                    交互导入：读文件 或 直接粘贴（单独一行 EOF 结束）
   sudo xray-deploy warp setup /root/wgcf-profile.conf
   cat wgcf-profile.conf | sudo xray-deploy warp setup -
   sudo xray-deploy warp setup <路径> --no-tun    强制 gVisor 用户态（LXC 上内核 TUN 常失败时用）
+  sudo xray-deploy warp setup <路径> --ipv6 on   强制保留 IPv6（默认 auto：本机无公网 IPv6 则剔除 v6）
   sudo xray-deploy warp show                     查看（私钥打码，末 4 位）
   sudo xray-deploy warp test [--net]             配置层自检；--net 额外临时探测真实出口（warp=on）
   sudo xray-deploy warp remove                   移除，回国流量回到 blackhole
   说明: 只改 geosite:cn / geoip:cn 的目标出站（block → warp）；广告/BT/私网仍 block
         隧道内目标必须是 IP → 域名由 profile 的 DNS 行（remoteDNS）在隧道内解析
         内核 TUN 默认交给 Xray 自动检测（不写 noKernelTun 字段）
+        本机无公网 IPv6 → 自动剔除 v6 隧道地址 / ::/0 路由 / v6 DNS（避免 TUN 建 v6 失败）
 
 客户端兼容性:
   Xray >= v26.9.8 的 REALITY 服务端要求客户端 ClientHello 携带 X25519MLKEM768：
