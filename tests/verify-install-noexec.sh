@@ -88,7 +88,14 @@ mk_install() {  # $1=目标文件
          -e "s|CONFIG_DIR=\"/etc\"|CONFIG_DIR=\"$T/etc\"|" "$f"
   chmod +x "$f"
 }
-mk_remote() { sed "s/^VPS_TOOLS_VERSION=\"[^\"]*\"/VPS_TOOLS_VERSION=\"9.9.9\"/" "$SRC_INSTALL" > "$T/remote-install.sh"; export MOCK_REMOTE_INSTALL="$T/remote-install.sh"; }
+# ⚠️ 远端副本必须走 mk_install（短路 EUID + 重定向到沙箱路径）：install_self 落盘后
+#    会 exec 它，若仍是原始路径，exec 出来的进程会写真实 /usr/local（2026-10-28 踩过：
+#    测试把 vps-bench/vnstat-monitor/xray-deploy 装进了宿主机）
+mk_remote() {
+  mk_install "$T/remote-install.sh"
+  sed -i 's/^VPS_TOOLS_VERSION="[^"]*"/VPS_TOOLS_VERSION="9.9.9"/' "$T/remote-install.sh"
+  export MOCK_REMOTE_INSTALL="$T/remote-install.sh"
+}
 reset_sandbox() { rm -rf "$T/usr/local/lib/vps-tools" "$T/usr/local/bin/vps-tools" "$T/etc"/*.env "$T/out"; }
 mk_install "$T/install.sh"; mk_remote
 

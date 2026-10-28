@@ -195,7 +195,7 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 | `verify-vps-backup.sh` | 175 | vps-backup 回归（mock，无需 root/网络） |
 | `verify-nginx-install.sh` | 72 | nginx-install 回归（mock）⚠️ 1 既存 FAIL |
 | `verify-docker-install.sh` | 59 | docker-install 回归（mock） |
-| `verify-install-noexec.sh` | 65 | 安装器契约：**不自动执行工具命令** + 指引子命令真实性 + README 索引完整性（mock，离线可跑） |
+| `verify-install-noexec.sh` | 72 | 安装器契约：**不自动执行工具命令** + 指引子命令真实性 + README 索引完整性（mock，离线可跑） |
 | `verify-xray-deploy-routing.sh` | 56 | xray 分流规则 |
 | `verify-xray-deploy-warp.sh` | 60 | WARP 回国出站（profile 解析 / 出站形态 / 路由三态 / 私钥不外泄） |
 | `verify-xray-deploy-fallback-scope.sh` | 31 | 回落候选范围（默认本地区，跨地区需 --all） |
@@ -204,7 +204,8 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 | `verify-vps-init-user-sshkey.sh` | 34 | vps-init 建用户 + 注入公钥（mock） |
 | `verify-xray-deploy-latest.sh` | 25 | xray 版本/升级 |
 | `verify-xray-deploy-behavior.sh` | 24 | xray 行为契约 |
-| `verify-install-selfupdate.sh` | 23 | install.sh 自更新（mock curl，离线可跑） |
+| `verify-install-selfupdate.sh` | 25 | install.sh 自更新（mock curl，离线可跑） |
+| `verify-install-self-reexec.sh` | 25 | 自更新后 re-exec：函数体与 TOOLS 清单必须同源（mock，离线可跑） |
 | `verify-xray-deploy-e2e.sh` | 16 | xray 端到端（需真实环境） |
 | `verify-xray-deploy-mode-e2e.sh` | 11 | xray 模式端到端 |
 | `verify-xray-deploy-all.sh` | — | 端到端分流切换 ⚠️ 既存 FAIL |
@@ -311,3 +312,21 @@ sudo vps-tools self-update        # 或：管理菜单选 5
 
 **变更（v1.8.0）**：安装/更新后**不再自动执行工具命令**（原先首次安装会自动调 `setup`）。
 安装器现在只打印下一步指引，配置与 systemd timer 由你显式运行 `sudo <tool> setup` 完成。
+
+**修复（v1.18.0）：自更新后 re-exec，函数体与 TOOLS 清单同源**
+
+自更新把新 `install.sh` 落成管理命令后，旧实现只 `reload_tools_registry()` 重载 TOOLS **数据**，
+不重载**函数体**。清单一旦引入新语法，旧代码就会读错：
+
+- 事故（2026-10-28 实测）：Ubuntu 机上从 v1.14.0 时期的副本更新 xray-deploy，副本先落成
+  v1.17.0 拿到新清单，但函数体还是旧的 → 清单末尾的共享文件条目 `lib/core.sh:lib/core.sh`
+  （v1.16.0 才引入的 `源:目标` 语法）被整串拼进 URL → `curl: (22) ... 404`；
+  旧版失败分支还是 `rm -rf $dest`（无 `.new` 暂存），把**已装好的**工具目录一起删了，
+  而文案写的是「已回滚」。
+- 现在：落盘成功后 `exec` 自身，数据与代码永远同源。你会看到一行
+  `管理命令已更新，重新载入新版本后继续（函数体与工具清单同源）`，然后当前操作自动继续
+  （菜单会重新显示，`install/update <tool>` 会原样重跑）。
+- 防循环：`exec` 时注入 `VPS_TOOLS_REEXEC=1`，新进程靠 `VPS_TOOLS_SKIP_SELF_UPDATE=1`
+  跳过自更新检查（省一次远端探测，也不会误报「已是最新」）；整包缓存经
+  `VPS_TOOLS_TARBALL_ROOT` 传递，不会为同一 ref 重复下载。
+- 回归见 `tests/verify-install-self-reexec.sh`（用 `BODY_MARKER_V2` 证明跑的是新函数体）。
