@@ -76,6 +76,12 @@ sed -i -e 's|\[\[ \$EUID -eq 0 \]\] \|\| return 1|:|g' \
        -e 's|if \[\[ \$EUID -ne 0 \]\]; then|if false; then|g' "$T/install.sh"
 chmod +x "$T/install.sh"
 
+# ⚠️ 整包里也要换成沙箱版 install.sh：install_self 会把它落成管理命令并 re-exec，
+#    若整包里仍是原始版（真 /usr/local 路径），exec 出来的进程会写真实系统目录。
+#    版本号保持不变，整包内容其余部分不动 → 不影响「整包安装」相关断言。
+cp "$T/install.sh" "$SRC_TREE/install.sh"
+tar -czf "$TGZ" -C "$T/src" vps-tools-main
+
 run(){ bash "$T/install.sh" "$@" > "$T/out" 2>&1; echo $?; }
 n_tgz(){ grep -c 'codeload.github.com' "$LOG" 2>/dev/null || true; }
 # 逐文件 raw 请求：测试里 GH_ORIGIN 被改成 mock.invalid，故按它计数

@@ -36,7 +36,7 @@ set -euo pipefail
 #    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
 #    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
 #    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.17.0"
+VPS_TOOLS_VERSION="1.18.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
@@ -115,7 +115,7 @@ record_installer_ref() {  # $1=ref
 # 故改为一次拉整包、本地解包、拷工具目录；一次运行内按 ref 缓存复用。
 # 失败（codeload 被墙 / 无 tar / 解包异常）自动回退逐文件下载，行为与旧版一致。
 # VPS_TOOLS_NO_TARBALL=1 强制关闭（出问题时的逃生开关）。
-TARBALL_ROOT=""                                   # 本次运行的缓存根（mktemp -d）
+TARBALL_ROOT="${VPS_TOOLS_TARBALL_ROOT:-}"         # 本次运行的缓存根（mktemp -d）
 TARBALL_SRC=""                                    # 最近一次 ensure_tarball 成功的仓库根
 TARBALL_DISABLED="${VPS_TOOLS_NO_TARBALL:-0}"     # 1 = 永不用整包
 
@@ -588,6 +588,9 @@ self_running_version() { installed_self_version "${BASH_SOURCE[0]}"; }
 # 解法：自更新成功后，从**刚落盘的新副本**里重新抽取 TOOLS 块并 eval 回内存。
 #   比 re-exec 更稳（不重启进程、不丢用户当前选择、无循环风险），且覆盖所有调用路径
 #   （菜单选 5、install/update 子命令、self-update），无需在每个入口加钩子。
+# ⚠️ 但它只重载**数据**，不重载**函数体**——清单引入新语法（如 `源:目标`）后，
+#    旧函数体会把新条目读错（2026-10-28 生产事故，详见 reexec_after_self_update 的注释）。
+#    故自更新后必须再 exec 自身：本函数保留为「exec 不可用」时的降级路径。
 reload_tools_registry() {
   local f="${VPS_TOOLS_CMD}" block
   [[ -r "$f" ]] || return 1
@@ -600,6 +603,41 @@ reload_tools_registry() {
   return 0
 }
 
+# ============ 自更新落盘后 re-exec：函数体必须与 TOOLS 清单同源 ============
+# 背景（2026-10-28 Ubuntu 生产机实测，reload_tools_registry 的第二次同类事故）：
+#   reload_tools_registry() 只重载**数据**（TOOLS 数组），不重载**代码**（函数体）。
+#   旧副本（v1.14.0 时期）自更新到 v1.17.0 后拿到新清单，但函数体还是旧的 →
+#   清单末尾的共享文件条目 `lib/core.sh:lib/core.sh`（v1.16.0 才引入的「源:目标」语法）
+#   被旧代码整串拼进 URL → raw.githubusercontent.com/.../lib/core.sh:lib/core.sh → 404。
+#   更糟：旧版失败分支是 `rm -rf $dest`（没有 .new 暂存、没有备份），
+#   把**已装好的**工具目录一起删了，而文案写的是「已回滚」。
+#   症状：一长串「已安装附加文件」之后突然 404，随后工具命令消失。
+# 解法：落盘成功后 exec 自身，数据与代码永远同源，新语法不会再被旧函数体误读。
+#   防循环：exec 时注入 VPS_TOOLS_REEXEC=1；新进程靠 VPS_TOOLS_SKIP_SELF_UPDATE=1
+#   跳过自更新检查（省一次远端探测，也不会误报「已是最新」）。
+#   可观测：打印「重新载入新版本」——出现这行就说明函数体已经换新。
+reexec_after_self_update() {
+  if [[ "${SELF_UPDATED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ -n "${VPS_TOOLS_REEXEC:-}" ]]; then
+    log_warn "已 re-exec 过仍检测到更新，跳过（防循环）；如异常请手动重跑 ${VPS_TOOLS_CMD##*/}"
+    return 0
+  fi
+  if [[ ! -x "${VPS_TOOLS_CMD}" ]]; then
+    log_warn "新副本不可执行（${VPS_TOOLS_CMD}），本次继续用当前代码；建议手动重跑"
+    return 0
+  fi
+  log_info "管理命令已更新，重新载入新版本后继续（函数体与工具清单同源）"
+  export VPS_TOOLS_REEXEC=1
+  export VPS_TOOLS_SKIP_SELF_UPDATE=1
+  # 整包缓存也带过去：新进程能命中 .ok 缓存，不必为同一 ref 再拉一次 tarball
+  if [[ -n "${TARBALL_ROOT:-}" ]]; then
+    export VPS_TOOLS_TARBALL_ROOT="$TARBALL_ROOT"
+  fi
+  exec "${VPS_TOOLS_CMD}" "${ORIG_ARGS[@]}"
+}
+
 # 安装/更新 vps-tools 管理命令（自身）
 #
 # ⚠️⚠️ 版本比对必须用【远端版本】做基准，不能用「本脚本的版本常量」——
@@ -608,6 +646,11 @@ reload_tools_registry() {
 #   **永远不会下载远端新版**（用户反馈「菜单选 5 无法更新自身」的真根因，
 #   复现见 verify-install-selfupdate.sh：副本 1.3.0 恒报已最新，远端 1.7.0 拉不下来）。
 install_self() {
+  # re-exec 后的新进程已被上一代确认过「已是最新」，跳过检查：
+  # 省掉一次多余的远端探测，也不会再打印「已是最新」误导调用方
+  if [[ -n "${VPS_TOOLS_SKIP_SELF_UPDATE:-}" ]]; then
+    return 0
+  fi
   [[ $EUID -eq 0 ]] || return 1
   local cur remote running cur_fp remote_fp
   local ref base explicit=0
@@ -693,6 +736,8 @@ install_self() {
     log_err "更新后复核失败：磁盘版本为 ${after:-空}（期望 ${got}）"
     return 1
   fi
+  # 只有复核通过才置位：调用方据此决定是否 re-exec（见 reexec_after_self_update）
+  SELF_UPDATED=1
   return 0
 }
 
@@ -739,7 +784,8 @@ interactive_menu() {
   # root 时确保 vps-tools 管理命令就位且为当前版本（管道方式首次运行也生效；
   # 旧版本副本会在无 TTY 下报 /dev/tty 错，故版本不一致也要刷新）
   if [[ $EUID -eq 0 ]]; then
-    install_self || true   # 非 root / 下载失败不阻塞菜单（成功时会自动重载 TOOLS 清单）
+    install_self || true   # 非 root / 下载失败不阻塞菜单
+    reexec_after_self_update   # 有更新则换新进程（函数体与清单同源），不返回
   fi
   # 启动检查更新（离线/同版本静默，不阻塞菜单）
   check_update || true
@@ -775,6 +821,8 @@ interactive_menu() {
 
 # ============ 主流程 ============
 main() {
+  # 原始参数：自更新后 re-exec 要原样重放（见 reexec_after_self_update）
+  ORIG_ARGS=("$@")
   # 参数解析：支持 --ref <tag> / --ref=<tag>（可出现在任意位置，其余按位置参数）
   local -a pos=()
   while [[ $# -gt 0 ]]; do
@@ -842,7 +890,8 @@ EOF
         log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}${CLI_REF:+ --ref ${CLI_REF}}"
         exit 1
       fi
-      install_self || true   # 管理命令与工具一起保持最新（成功时会自动重载 TOOLS 清单）
+      install_self || true   # 管理命令与工具一起保持最新
+      reexec_after_self_update   # 有更新则用新代码重跑本命令，不返回
       if [[ -n "$tool" ]]; then
         local line
         if line=$(find_tool "$tool"); then
@@ -880,6 +929,7 @@ EOF
         exit 1
       fi
       install_self || { log_err "self-update 失败"; return 1; }
+      reexec_after_self_update   # 更新成功则重跑 self-update（新进程报「已是最新」）
       ;;
     *)
       log_err "未知动作: ${action}（install / update / uninstall / list / self-update）"
