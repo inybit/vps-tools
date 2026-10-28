@@ -112,9 +112,13 @@ warp_test() {  # [--net]
   log_ok "配置校验通过（xray -test）"
   if [[ $net -eq 0 ]]; then rm -f "$tcfg"; return 0; fi
 
-  "${BIN_PATH}" run -config "$tcfg" >/dev/null 2>&1 &
+  # 注意：mktemp 生成的文件没有 .json 扩展名，必须显式 -format=json，
+  # 否则 xray run 报 "Failed to get format"，临时实例起不来、探测必然误报失败。
+  "${BIN_PATH}" run -format=json -config "$tcfg" >/dev/null 2>&1 &
   pid=$!
   while (( i < 40 )); do
+    # 临时实例已退出（配置/端口/TUN 问题）→ 立即停，别空转 20 秒再报“无响应”
+    kill -0 "$pid" 2>/dev/null || break
     out="$(curl -s --max-time 5 -x "socks5h://127.0.0.1:${tport}" \
            https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)"
     grep -q '^warp=' <<<"$out" && break
