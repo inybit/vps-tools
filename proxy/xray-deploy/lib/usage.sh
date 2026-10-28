@@ -20,7 +20,11 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   xray-deploy fallback-cn-test [域名] 回落域名中国方向可达性检测（Globalping 探针；无参=全部 tier4 候选）
                                    需要外网访问 api.globalping.io；只读检测，不改部署状态
                                    **提交前需确认数据出境**（默认拒绝；自动化用 CN_TEST_ASSUME_YES=1）
-  sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
+  sudo xray-deploy update-geo [--restart]  更新 geosite/geoip（原子替换：下载异常不覆盖线上文件）
+                                   --restart = 更新后 xray -test 校验通过才重启服务（失败回滚）
+  sudo xray-deploy geo-timer [install [OnCalendar]|status|remove]
+                                  geo 数据每周自动更新（systemd timer，默认每周一 01:00 + ≤6h 抖动）
+                                  install 省略表达式即用默认；install 也在首次部署时自动执行
   sudo xray-deploy upgrade [版本]   不带参数=升级到最新（失败自动回滚，含防降级）；
                                    带版本=切换/回退到指定内核版本，允许降级
                                    例: sudo xray-deploy upgrade v26.7.28
@@ -92,10 +96,12 @@ WARP 回国出站（WireGuard，1.15.0+）:
   sudo xray-deploy warp show                     查看（私钥打码，末 4 位）
   sudo xray-deploy warp test [--net]             配置层自检；--net 额外临时探测真实出口（warp=on）
   sudo xray-deploy warp remove                   移除，回国流量回到 blackhole
+  sudo xray-deploy warp cleanup                  清理内核 TUN 残留（IPv6 表 ≥10230 的 rule/route）
   说明: 只改 geosite:cn / geoip:cn 的目标出站（block → warp）；广告/BT/私网仍 block
         隧道内目标必须是 IP → 域名由 profile 的 DNS 行（remoteDNS）在隧道内解析
         内核 TUN 默认交给 Xray 自动检测（不写 noKernelTun 字段）
         本机无公网 IPv6 → 自动剔除 v6 隧道地址 / ::/0 路由 / v6 DNS（避免 TUN 建 v6 失败）
+        判定「本机有公网 IPv6」时排除 Xray 自己的 wg0/wg1（旧 key 的隧道 v6 地址不算本机能力）
 
 客户端兼容性:
   Xray >= v26.9.8 的 REALITY 服务端要求客户端 ClientHello 携带 X25519MLKEM768：

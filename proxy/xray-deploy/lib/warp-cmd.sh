@@ -128,53 +128,6 @@ warp_show() {
   echo "  自检: sudo xray-deploy warp test [--net] ｜ 移除: sudo xray-deploy warp remove"
 }
 
-# ============ 自检 ============
-# 默认只做配置层（生成出站 + xray -test）；--net 额外临时起 loopback socks 探测真实出口
-warp_test() {  # [--net]
-  local net=0; [[ "${1:-}" == "--net" ]] && net=1
-  [[ -f "$STATE_FILE" ]] || die "尚未安装（state.json 不存在）"
-  warp_enabled || die "WARP 未启用（先: sudo xray-deploy warp setup /root/wgcf-profile.conf）"
-  local ob
-  ob="$(gen_warp_outbound)"
-  [[ -n "$ob" ]] || die "生成 WARP 出站失败（state.json 的 .warp 不完整）"
-  log_ok "出站字段: $(jq -r 'keys | join(",")' <<<"$ob")"
-  [[ -x "$BIN_PATH" ]] || { log_warn "xray 二进制缺失（${BIN_PATH}），跳过 -test"; return 0; }
-
-  local tcfg tport=18080 pid out="" w i=0
-  tcfg="$(mktemp "${TMPDIR:-/tmp}/warp-test.XXXXXX")" || die "创建临时配置失败"
-  jq -n --argjson ob "$ob" --argjson p "$tport" '{
-    log: { loglevel: "warning" },
-    inbounds: [{ tag: "socks-in", listen: "127.0.0.1", port: $p, protocol: "socks",
-                 settings: { udp: false }, sniffing: { enabled: true, destOverride: ["http", "tls"] } }],
-    outbounds: [$ob, { protocol: "freedom", tag: "direct" }]
-  }' > "$tcfg"
-  if ! "${BIN_PATH}" run -test -format=json -config "$tcfg" >/dev/null 2>&1; then
-    rm -f "$tcfg"
-    die "配置校验失败（xray -test）—— 当前 Xray 版本可能不支持 wireguard 出站或 remoteDNS 字段"
-  fi
-  log_ok "配置校验通过（xray -test）"
-  if [[ $net -eq 0 ]]; then rm -f "$tcfg"; return 0; fi
-
-  "${BIN_PATH}" run -config "$tcfg" >/dev/null 2>&1 &
-  pid=$!
-  while (( i < 40 )); do
-    out="$(curl -s --max-time 5 -x "socks5h://127.0.0.1:${tport}" \
-           https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)"
-    grep -q '^warp=' <<<"$out" && break
-    sleep 0.5; i=$((i + 1))
-  done
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  rm -f "$tcfg"
-  w="$(grep -m1 '^warp=' <<<"$out" | cut -d= -f2 || true)"
-  if [[ "$w" == "on" ]]; then
-    log_ok "出口探测: WARP 生效（warp=on，出口 IP $(grep -m1 '^ip=' <<<"$out" | cut -d= -f2)）"
-  else
-    log_warn "出口探测失败（warp=${w:-无响应}）—— 查 endpoint 可达性/账号状态；配置本身已过 -test"
-    return 1
-  fi
-}
-
 # ============ 移除 ============
 warp_remove() {
   need_root
@@ -183,6 +136,8 @@ warp_remove() {
   confirm "确认移除 WARP 出站（回国流量回到 blackhole）？" || { log_info "已取消"; return 0; }
   state_set 'del(.warp)'
   rebuild_and_reload
+  # 新实例不再有 warp 出站 → 不会重建内核 TUN；旧实例若被 SIGKILL 过，规则还在
+  warp_cleanup_stale_tun --quiet || true
   log_info "WARP 出站已移除，回国流量恢复 blackhole"
 }
 
@@ -191,10 +146,11 @@ warp_dispatch() {
   local sub="${1:-show}"
   shift || true
   case "$sub" in
-    setup)  warp_setup "$@" ;;
-    show)   warp_show ;;
-    test)   warp_test "$@" ;;
-    remove) warp_remove ;;
-    *)      die "warp 用法: setup [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off] | show | test [--net] | remove" ;;
+    setup)   warp_setup "$@" ;;
+    show)    warp_show ;;
+    test)    warp_test "$@" ;;
+    cleanup) warp_cleanup_stale_tun "$@" ;;
+    remove)  warp_remove ;;
+    *)       die "warp 用法: setup [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off] | show | test [--net] | cleanup [--dry-run] | remove" ;;
   esac
 }

@@ -10,6 +10,8 @@
 #       warp 开 + chain → cn 仍 warp 且 catch-all 走落地
 #   [E] 真实 xray -test 接受该配置（无二进制时 SKIP，不计 FAIL）
 #   [F] 私钥不外泄：warp show / info 输出里私钥出现 0 次，且只露末 4 位
+#   [H] 内核 TUN 残留（换 key 场景）：v6 判定排除 wg0/wg1；策略路由清理只动表 10230-10240
+#       （mock ip 断言调用面 + 真内核 netns 实测，无权限时 SKIP）
 #
 # 用法: bash tests/verify-xray-deploy-warp.sh
 # 退出码: 0=全部通过
@@ -302,6 +304,86 @@ if [[ -n "$XRAY_BIN" && -x "$XRAY_BIN" ]]; then
   mk_state on off '{"ipv6":false}'
   gen6 "$IF6_PUB"
   ck "ipv6=false：真 xray -test 接受裁剪后的配置" "$?" "0"
+fi
+echo
+
+# ---------- H. 换 key 后的旧 key 残留（内核 TUN） ----------
+echo "[H] 内核 TUN 残留：v6 判定排除 TUN + 策略路由清理"
+# H1) 判定必须排除 Xray 自己的 wg0/wg1：换 key 时旧实例的 wg0 上挂着**旧 key 的
+#     WARP v6 地址**（2606:4700:…），不排除就会把隧道 v6 当成「本机有公网 IPv6」，
+#     新出站因此保留 v6 → 没有原生 v6 的机器上内核 TUN 建不起来。
+printf '2606:4700:110:8f1a:9b2c:3d4e:5f60:9c3d 03 40 00 80 wg0\nfe800000000000000000000000000001 02 40 20 80 eth0\n' > "$TMP/if6.wg"
+ck "只有 wg0 的 WARP v6 → 判定无公网 v6（修复前误判为有）" "$(has6 "$TMP/if6.wg")" "1"
+printf '2a0104f8000000000000000000000001 02 40 00 80 eth0\n2606:4700:110:8f1a::1 03 40 00 80 wg0\n' > "$TMP/if6.both"
+ck "原生 v6 + wg0 → 仍判定有" "$(has6 "$TMP/if6.both")" "0"
+printf '2606:4700:110::1 03 40 00 80 wg1\n' > "$TMP/if6.wg1"
+ck "wg1 也排除（不只 wg0）" "$(has6 "$TMP/if6.wg1")" "1"
+
+# H2) 清理范围：只动表号 >=10230（Xray 内核 TUN 专用区间），main/local/自定义表不碰
+IPMOCK="$TMP/mockip"; mkdir -p "$IPMOCK"
+RULES="$TMP/rules.txt"; IPLOG="$TMP/ip.log"
+cat > "$IPMOCK/ip" <<EOS
+#!/usr/bin/env bash
+echo "ip \$*" >> "${IPLOG}"
+if [[ "\$1 \$2 \$3" == "-6 rule show" ]]; then cat "${RULES}"; exit 0; fi
+if [[ "\$1 \$2 \$3 \$4" == "-6 rule del table" ]]; then
+  t="\$5"
+  awk -v t="\$t" '!((\$NF == t) && !done) { print } (\$NF == t && !done) { done = 1 }' "${RULES}" > "${RULES}.tmp"
+  mv "${RULES}.tmp" "${RULES}"; exit 0
+fi
+exit 0
+EOS
+chmod +x "$IPMOCK/ip"
+reset_rules() {
+  printf '0:\tfrom all lookup local\n32762:\tfrom 2606:4700:110::7 lookup 10241\n32763:\tfrom 2606:4700:110::9 lookup 10231\n32764:\tfrom all oif wg0 [detached] lookup 10230\n32765:\tfrom 2606:4700:110:8f1a::1 lookup 10230\n32766:\tfrom all lookup main\n32767:\tfrom 2001:db8::/32 lookup 12345\n' > "$RULES"
+  : > "$IPLOG"
+}
+ipclean() { env PATH="$IPMOCK:$PATH" bash "$GEN" "$MAIN" "$TMP/none.json" "$TMP/none.cfg" "$MOCKBIN/xray" warp_cleanup_stale_tun "$@" >/dev/null 2>&1; }
+
+reset_rules; ipclean --quiet
+ck "表 10230 的 rule 已清空"        "$(grep -c 'lookup 10230' "$RULES")" "0"
+ck "表 10231 的 rule 也已清空"      "$(grep -c 'lookup 10231' "$RULES")" "0"
+ck "main 规则保留"                  "$(grep -c 'from all lookup main' "$RULES")" "1"
+ck "local 规则保留"                 "$(grep -c 'from all lookup local' "$RULES")" "1"
+ck "自定义表 12345 不碰"            "$(grep -c 'lookup 12345' "$RULES")" "1"
+ck "超出 10240 的表不碰（宁可漏清不误删）" "$(grep -c 'lookup 10241' "$RULES")" "1"
+ck "flush 了 10230 的路由"          "$(grep -c -- '-6 route flush table 10230' "$IPLOG")" "1"
+ck "flush 了 10231 的路由"          "$(grep -c -- '-6 route flush table 10231' "$IPLOG")" "1"
+ck "没 flush 自定义表"              "$(grep -c -- 'route flush table 12345' "$IPLOG")" "0"
+ck "没 flush 10241"                 "$(grep -c -- 'route flush table 10241' "$IPLOG")" "0"
+ck "没动 main(254)"                 "$(grep -c -- 'table 254' "$IPLOG")" "0"
+
+reset_rules; ipclean --dry-run
+ck "--dry-run 不删 rule"            "$(grep -c 'lookup 10230' "$RULES")" "2"
+ck "--dry-run 不调 del"             "$(grep -c 'rule del' "$IPLOG")" "0"
+
+reset_rules
+# PATH 里去掉 /usr/sbin（ip 在那里）；若系统把 ip 也装在 /usr/bin 则跳过该断言
+NOIP_PATH="/usr/bin:/bin"
+if env PATH="$NOIP_PATH" command -v ip >/dev/null 2>&1; then
+  echo "  [SKIP] PATH 里无法排除 ip，跳过「无 ip 命令」断言"; SKIP=$((SKIP+1))
+else
+  ck "无 ip 命令 → 返回 0（不打断部署）" \
+    "$(env PATH="$NOIP_PATH" bash "$GEN" "$MAIN" "$TMP/none.json" "$TMP/none.cfg" "$MOCKBIN/xray" warp_cleanup_stale_tun --quiet >/dev/null 2>&1; echo $?)" "0"
+fi
+
+# H3) 真内核：在独立 netns 里注入残留 → 清理（无 CAP_NET_ADMIN / unshare 时 SKIP）
+if [[ "$(id -u)" -eq 0 ]] && command -v unshare >/dev/null 2>&1 && unshare -n -- ip -6 rule show >/dev/null 2>&1; then
+  cat > "$TMP/netns.sh" <<EONS
+#!/usr/bin/env bash
+ip -6 rule add from 2606:4700:110::1 table 10230
+ip -6 rule add oif wg0 table 10230
+ip -6 rule add from 2606:4700:110::9 table 10231
+bash "${GEN}" "${MAIN}" "${TMP}/none.json" "${TMP}/none.cfg" "${MOCKBIN}/xray" \
+     warp_cleanup_stale_tun --quiet >/dev/null 2>&1
+ip -6 rule show
+EONS
+  out="$(unshare -n -- bash "$TMP/netns.sh" 2>&1)"
+  ck "真内核：残留 rule 清零（10230）" "$(grep -c 'lookup 10230' <<<"$out")" "0"
+  ck "真内核：残留 rule 清零（10231）" "$(grep -c 'lookup 10231' <<<"$out")" "0"
+  ck "真内核：main 规则仍在"           "$(grep -c 'from all lookup main' <<<"$out")" "1"
+else
+  echo "  [SKIP] 无 root 或 unshare -n 不可用，跳过真内核清理验证"; SKIP=$((SKIP+1))
 fi
 echo
 

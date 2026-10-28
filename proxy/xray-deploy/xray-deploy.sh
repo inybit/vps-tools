@@ -6,7 +6,7 @@
 # 业务逻辑全部在 lib/ 下按模块拆分（每文件 ≤200 行）。
 #
 # 用法:  xray-deploy.sh [install|info|config|fallback-test|fallback-cn-test|
-#                        update-geo|upgrade|status|restart|uninstall|protocol|chain]
+#                        update-geo|geo-timer|upgrade|status|restart|uninstall|protocol|chain|warp]
 #        无参 = 交互菜单
 # 帮助:  xray-deploy.sh -h
 # 环境变量: GH_PROXY  GitHub 下载镜像前缀（可选，如 https://ghproxy.com/）
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.15.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.16.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +61,7 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 . "${LIB_DIR}/ss2022.sh"
 . "${LIB_DIR}/outbound.sh"
 . "${LIB_DIR}/warp.sh"
+. "${LIB_DIR}/warp-tun.sh"
 . "${LIB_DIR}/warp-cmd.sh"
 . "${LIB_DIR}/menu.sh"
 . "${LIB_DIR}/routing.sh"
@@ -75,6 +76,8 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 . "${LIB_DIR}/cmd-info.sh"
 . "${LIB_DIR}/cmd-fallback.sh"
 . "${LIB_DIR}/globalping.sh"
+. "${LIB_DIR}/geo-update.sh"
+. "${LIB_DIR}/geo-timer.sh"
 . "${LIB_DIR}/usage.sh"
 
 # ============ 子命令分发 ============
@@ -88,7 +91,8 @@ case "$CMD" in
   config)        cmd_config "${2:-show}" ;;
   fallback-test) cmd_fallback_test "${2:-}" ;;
   fallback-cn-test) cmd_fallback_cn_test "${2:-}" ;;
-  update-geo)    update_geo "${2:-}" ;;
+  update-geo)    shift || true; update_geo "$@" ;;
+  geo-timer)     shift || true; geo_timer_dispatch "$@" ;;
   upgrade)       cmd_upgrade "${2:-}" ;;
   status)        need_root; service_status ;;
   restart)       need_root; service_restart ;;
@@ -119,7 +123,7 @@ case "$CMD" in
     warp_dispatch "$@"
     ;;
   menu) : ;;  # 走交互菜单
-  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/update-geo/upgrade/status/restart/uninstall/protocol/chain/warp）" ;;
+  *) die "未知命令: $CMD（支持 install/info/config/fallback-test/fallback-cn-test/update-geo/geo-timer/upgrade/status/restart/uninstall/protocol/chain/warp）" ;;
 esac
 
 # ============ 交互菜单 ============

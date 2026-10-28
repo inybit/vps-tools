@@ -93,6 +93,15 @@ gen_outbound_wireguard
 build_base_rules_json
 routing_cn_tag
 main_menu
+_warp_tun_rule_count
+geo_timer_calendar_ok
+geo_timer_write_units
+geo_timer_install
+geo_timer_status
+geo_timer_remove
+geo_timer_dispatch
+warp_stale_tun_tables
+warp_cleanup_stale_tun
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---
@@ -121,3 +130,6 @@ download_xray
 detect_server_country
 select_fallback_domain
 cmd_fallback_test
+cmd_uninstall
+rebuild_and_reload
+update_geo

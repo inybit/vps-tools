@@ -78,5 +78,9 @@ resolve_proto_name() {  # $1=输入
 # 重建配置并重载服务（增删改后调用）
 rebuild_and_reload() {
   build_config
+  # build_config 里的 `xray run -test` 会真建内核 TUN 却不走 Close()（os.Exit 路径）
+  # → 每 rebuild 漏一对 IPv6 策略路由（真机复现，见 lib/warp-tun.sh）。
+  # 在 restart 之前清：此刻旧实例的规则马上也会被新实例重建，删掉无副作用。
+  warp_cleanup_stale_tun --quiet || true
   service_restart
 }

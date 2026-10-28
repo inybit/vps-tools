@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
-# xray-bin.sh — Xray 二进制：版本查询 / 版本选择 / 下载安装 / geo 数据更新
+# xray-bin.sh — Xray 二进制：版本查询 / 版本选择 / 下载安装（geo 数据更新见 lib/geo-update.sh）
 
 # ============ Xray 版本查询 ============
-# ⚠️ 必须用 releases 列表而非 /releases/latest —— 见主脚本 GITHUB_API 注释：
-#    Xray 全部 release 都标 prerelease:true，/releases/latest 会漏掉它们
-#    （实测恒返回 v26.3.27，实际最新 v26.9.9，导致永远装旧版）。
-#    列表按 published_at 倒序，取首个非 draft 的 tag_name。
-#
-# ⚠️⚠️ 切片必须用【纯 bash】，不能用 `... | head -N`：
-#    调用方（install_xray 等）在 `set -euo pipefail` 下取值，head 读够就关管道 →
-#    上游 printf 收 SIGPIPE → 管道整体返回非 0 → pipefail 判失败 →
+# ⚠️ 必须用 releases 列表而非 /releases/latest（原因见主脚本 GITHUB_API 注释）：
+#    按 published_at 倒序，取首个非 draft 的 tag_name。
+# ⚠️⚠️ 切片必须用【纯 bash】，不能用 `... | head -N`：调用方在 `set -euo pipefail`
+#    下取值，head 读够就关管道 → 上游 printf 收 SIGPIPE → pipefail 判失败 →
 #    `tags="$(recent_xray_tags)" || return 0` 静默提前返回，菜单一行都不打印
-#    （2026-09-21 实测踩到：菜单空白、版本选择形同虚设）。
+#    （2026-09-21 实测：菜单空白、版本选择形同虚设）。
 
 # ---------- 通道 1：GitHub REST API（含 draft 元数据，可返回 30 条）----------
 _xray_tags_from_api() {
@@ -200,18 +196,4 @@ install_xray() {
   [[ -n "$tag" ]] || die "无法解析 Xray 版本号（GitHub API 返回异常）"
   download_xray "$tag" || die "Xray 安装失败"
   [[ -x "${BIN_PATH}" ]] || die "Xray 二进制缺失"
-}
-
-# ============ geo 数据更新（MetaCubeX/meta-rules-dat） ============
-update_geo() {
-  local quiet="${1:-}"
-  need_root
-  mkdir -p "${INSTALL_DIR}"
-  for f in geosite.dat geoip.dat; do
-    local url="${GEO_SOURCE}/${f}"
-    [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY}${url}"
-    [[ -z "$quiet" ]] && log_info "更新 ${f}: ${url}"
-    curl -fL --max-time 120 -o "${INSTALL_DIR}/${f}" "$url" || die "${f} 下载失败"
-  done
-  [[ -z "$quiet" ]] && log_info "geo 数据已更新（MetaCubeX/meta-rules-dat）"
 }

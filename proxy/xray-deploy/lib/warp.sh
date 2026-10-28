@@ -93,11 +93,17 @@ warp_parse_profile() {
 #   fd00::/8   → fd…（首字符 f，ULA）
 #   公网       → 2xxx / 3xxx（首字符 2 或 3）
 # 不看 disable_ipv6 / v6 默认路由：内核 TUN 需要的是「能加 v6 地址」，有公网 v6 即成立。
+#
+# ⚠️ 必须排除 Xray 自己的内核 TUN 接口 wg0/wg1…（Xray proxy/wireguard/tun.go
+#    CalculateInterfaceName("wg")）。否则换 key 时——旧实例还在跑、wg0 上挂着
+#    **旧 key 的 WARP v6 地址**（2606:4700:… / 2a09:bac5:…，首字符都是 2）——
+#    这个隧道地址会被当成「本机有公网 IPv6」→ 新出站保留 v6 → 没有原生 v6 的机器上
+#    内核 TUN 加 v6 路由失败，整个 WARP 出站起不来（2026-10-28 报障的根因）。
 # WARP_IF_INET6_FILE 仅供测试注入假数据，生产不设。
 warp_local_has_public_ipv6() {
   local f="${WARP_IF_INET6_FILE:-/proc/net/if_inet6}"
   [[ -r "$f" ]] || return 1
-  awk '$1 ~ /^[23]/ { f = 1 } END { exit(f ? 0 : 1) }' "$f" 2>/dev/null
+  awk '$1 ~ /^[23]/ && $6 !~ /^wg[0-9]+$/ { f = 1 } END { exit(f ? 0 : 1) }' "$f" 2>/dev/null
 }
 
 # 剔除 v6 条目（address / dns / allowed_ips 里带 ':' 的项）→ 单行 JSON
