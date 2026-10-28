@@ -8,8 +8,8 @@ Xray 一键部署 / 管理：多协议注册表、回落域名双方向检测、
 | | |
 |---|---|
 | 域 | `proxy/` |
-| 版本 | `1.13.0` |
-| 结构 | 多文件（入口 + 27 lib） |
+| 版本 | `1.16.0` |
+| 结构 | 多文件（入口 + 33 lib） |
 | 依赖 | curl, unzip, jq, openssl |
 | 配置 | `/etc/xray-deploy/state.json`（600，**含私钥**） |
 | 服务 | systemd / OpenRC |
@@ -37,7 +37,8 @@ xray-deploy info                 查看节点信息（明文 + 客户端配置�
 xray-deploy config show|edit     查看/编辑服务端配置（edit 后自动 xray -test 校验并重载）
 xray-deploy fallback-test [域名]      测试回落域名握手延迟并排序（无参=全部候选）
 xray-deploy fallback-cn-test [域名]   回落域名中国方向可达性检测（Globalping 探针）
-sudo xray-deploy update-geo      更新 geosite/geoip（或自行配 systemd timer）
+sudo xray-deploy update-geo [--restart]  更新 geosite/geoip（原子替换，下载异常不覆盖线上文件）
+sudo xray-deploy geo-timer install|status|remove   geo 数据每周自动更新（systemd timer）
 sudo xray-deploy upgrade [版本]  不带参数=升级到最新（失败自动回滚，含防降级）；
                                    带版本=切换/回退到指定内核版本（允许降级）
                                    例: sudo xray-deploy upgrade v26.7.28
@@ -202,6 +203,7 @@ sudo xray-deploy warp setup /root/wgcf-profile.conf --ipv6 on   # 强制保留 I
 sudo xray-deploy warp show                     # 私钥打码（只露末 4 位）
 sudo xray-deploy warp test [--net]             # 配置层自检；--net 临时探测真实出口
 sudo xray-deploy warp remove                   # 回到 blackhole
+sudo xray-deploy warp cleanup [--dry-run]      # 清理内核 TUN 残留（换 key 后用；见下）
 ```
 
 profile → 出站字段映射：
@@ -228,8 +230,38 @@ profile → 出站字段映射：
   原因：无 v6 的机器上内核 TUN 加 v6 地址/路由会失败，整个 wireguard 出站起不来。
   逃生门 `--ipv6 on`（强制保留，本机无 v6 时告警）/ `--ipv6 off`（强制剔除）；默认 `auto`。
   旧 state 无 `.warp.ipv6` 字段时按本机实时探测（自愈），`warp show` 会标「自动（老配置）」。
+- **换 key 后必须清旧 key 的 v6 残留（1.16.0+ 自动做）**：Xray 内核 TUN 会在 IPv6 策略路由里
+  加 `from <隧道 v6> lookup 10230` / `oif wg0 lookup 10230` 两条 rule + `::/0` 路由。正常退出会删，
+  但 **`xray run -test` 走 `os.Exit` 不执行 `Close()`** —— 而每次 rebuild 都要跑 `-test`，
+  于是每 rebuild 漏一对 rule，无限累积。后果：① 旧 key 的 v6 地址痕迹留在内核里；
+  ② 换 key 时旧实例的 `wg0` 上还挂着旧 key 的 WARP v6（`2606:4700:…`），若按
+  `/proc/net/if_inet6` 判「本机有公网 IPv6」就会误判 → 新出站保留 v6 → 无原生 v6 的机器上
+  TUN 建不起来。现在：判定排除 `wg0/wg1…`；`rebuild_and_reload` / `warp remove` 自动清表
+  10230–10240 的残留（更往上/`main`/`local`/自定义表一律不碰，宁可漏清不误删）。
 - 多 `[Peer]` 直接报错，不猜。
 - `warp` 与 `chain` 正交：分流模式照旧，回国流量始终先命中 warp 规则。
+
+## geo 数据自动更新（每周，1.16.0+）
+
+路由分流靠 `geosite:` / `geoip:` 标签，MetaCubeX 规则库每周更新；Xray **只在启动时**加载
+geo 数据，所以「更新完必须重启」才生效。
+
+```bash
+sudo xray-deploy geo-timer install [OnCalendar]   # 默认 Mon *-*-* 01:00:00 + 随机抖动 ≤6h
+sudo xray-deploy geo-timer status                 # is-active + 下次触发 + 上次运行结果
+sudo xray-deploy geo-timer remove                 # 只删 timer，不动 geo 数据与服务
+sudo xray-deploy update-geo [--restart]           # 手动更新；--restart = 校验通过才重启
+```
+
+- **首次部署自动装**（`install` 末尾），卸载时一并删除；unit 名是
+  `xray-deploy-geo-update.service/.timer` —— **不能**叫 `xray-deploy.service`（那是主服务的）。
+- **为什么 `OnCalendar` 还要随机抖动**：一批机器同一时刻打 GitHub 会撞限流，`RandomizedDelaySec=6h`
+  把实际触发摊到 01:00–07:00；`Persistent=true` 保证关机错过会补跑。
+- **原子替换 + 尺寸闸**：先下到 `<f>.new` → 校验 >1MB（挡错误页/半截文件）→ 备份 `.bak` → `mv`。
+  下载失败或内容异常时**线上文件一个字节都不动**，命令非 0 退出（systemd 记 failed）。
+- **`--restart` 的校验闸**：重启前跑 `xray -test`（带 `XRAY_LOCATION_ASSET`），失败就把 `.bak`
+  换回去且**不重启** —— 否则每周定时任务会把坏 geo 数据变成「每周定时打挂服务」。
+- OpenRC 机器只提示不支持（仓库约定：定时统一 systemd timer，不写 crontab/cron.weekly）。
 
 ## 客户端兼容性硬约束
 
@@ -246,6 +278,11 @@ profile → 出站字段映射：
 - `vless-xhttp` 的 mihomo 客户端需 v1.19.23+。
 
 ## 已知坑（部署前必读）
+
+- **`xray run -test` 会真建内核 TUN 却不清理**：它走 `os.Exit`，不执行 `kernelTun.Close()`，
+  于是每次 `-test`（= 每次 rebuild）在 IPv6 策略路由里漏一对 rule，优先级递减、无限累积
+  （实测单机 13 对）。本工具已在 `rebuild_and_reload` 里清理表 10230–10240；手工排查用
+  `ip -6 rule show | grep -E 'lookup 1023[0-9]|lookup 10240'`，或 `xray-deploy warp cleanup --dry-run`。
 
 - **整机只留一个 REALITY inbound 占 443**。两个 REALITY inbound 监听同端口时内核按
   `SO_REUSEPORT` 随机分发、SNI 不参与分流 → 实测 30% 串台
@@ -311,13 +348,14 @@ profile → 出站字段映射：
 ```
 proxy/xray-deploy/
 ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-└── lib/                    # 27 模块
+└── lib/                    # 33 模块
     ├── common.sh service.sh state.sh xray-bin.sh keys.sh registry.sh
     ├── fallback-data.sh fallback.sh globalping.sh
     ├── inbound.sh outbound.sh routing.sh chain.sh chain-info.sh ss2022.sh
     ├── proto-wizard.sh xhttp3.sh proto-crud.sh proto-edit.sh
     ├── client-mihomo.sh client-singbox.sh client-ss2022.sh
-    └── cmd-lifecycle.sh cmd-upgrade.sh cmd-info.sh cmd-fallback.sh usage.sh
+    ├── geo-update.sh geo-timer.sh warp.sh warp-tun.sh warp-cmd.sh
+    └── cmd-lifecycle.sh cmd-upgrade.sh cmd-info.sh cmd-fallback.sh usage.sh menu.sh
 ```
 
 ## 回归测试
@@ -336,3 +374,4 @@ bash tests/run-all.sh xray      # 全部 xray 相关套件
 | `verify-xray-deploy-e2e.sh` | 端到端（需真实环境） |
 | `verify-xray-deploy-mode-e2e.sh` | 分流模式端到端（真实 xray 决策日志） |
 | `verify-xray-deploy-split.sh` | 拆分等价性（函数体逐字对比基线） |
+| `verify-xray-deploy-geo-timer.sh` | geo 每周自动更新（timer unit / systemctl 序列 / 原子替换与回滚，55 断言） |

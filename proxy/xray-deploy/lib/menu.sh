@@ -52,7 +52,17 @@ main_menu() {
           *) log_warn "无效选择" ;;
         esac
         ;;
-      5) update_geo ;;
+      5)
+        echo "  1) 立即更新  2) 安装/修复每周定时任务  3) 查看定时任务状态  4) 移除定时任务"
+        read_input "选择 [1-4]: " gc || { log_warn "无交互终端"; continue; }
+        case "${gc:-1}" in
+          1) update_geo ;;
+          2) geo_timer_install ;;
+          3) geo_timer_status ;;
+          4) geo_timer_remove ;;
+          *) log_warn "无效选择" ;;
+        esac
+        ;;
       6) cmd_upgrade ;;
       7)
         echo "  1) 查看配置  2) 编辑配置"

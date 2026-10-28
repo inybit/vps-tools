@@ -60,8 +60,11 @@ cmd_install() {
   fi
   rebuild_and_reload
   service_start
+  # geo 数据每周自动更新（更新 → xray -test → 重启；unit 见 lib/geo-timer.sh）
+  # 装失败不算部署失败：主服务已起来，只是少了自动更新
+  geo_timer_install || log_warn "geo 更新定时任务安装失败（可稍后手动: sudo xray-deploy geo-timer install）"
   log_info "安装完成！运行 'xray-deploy.sh info' 查看节点信息"
-  log_info "geo 数据更新: 运行 'xray-deploy update-geo'（手动，或自行配 systemd timer）"
+  log_info "geo 数据: 每周自动更新（xray-deploy geo-timer status 查看）｜手动: xray-deploy update-geo"
 }
 
 # ============ 卸载 ============
@@ -70,7 +73,10 @@ cmd_uninstall() {
   read -r -p "确认卸载 Xray 部署（删除二进制/配置/服务/定时）？[y/N]: " yn
   [[ "${yn,,}" == "y" ]] || { log_info "已取消"; return 0; }
   service_stop
+  # geo 定时任务（systemd timer）+ 历史遗留的 cron.weekly 条目一起清
+  geo_timer_remove >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/${SERVICE_NAME}.service" "/etc/init.d/${SERVICE_NAME}"
+  rm -f "/etc/systemd/system/${GEO_SERVICE_NAME}.service" "/etc/systemd/system/${GEO_SERVICE_NAME}.timer"
   rm -f "/etc/cron.weekly/xray-geo-update"
   rm -rf "${INSTALL_DIR}" "${CONFIG_DIR}"
   if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload; fi
