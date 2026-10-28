@@ -5,14 +5,15 @@
 # 私钥永不打印：setup 回显与 show 均只给末 4 位。
 
 # ============ 导入 ============
-warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c]
-  local src="" tun="null" reserved="" a t json yn
+warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off]
+  local src="" tun="null" reserved="" ipv6="auto" a t json yn
   need_root
   [[ -f "$STATE_FILE" ]] || die "尚未安装，先运行: xray-deploy install"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --no-tun)   tun="true" ;;
       --reserved) reserved="${2:-}"; shift || true ;;
+      --ipv6)     ipv6="${2:-auto}"; shift || true ;;
       -)          src="-" ;;
       *)          src="$1" ;;
     esac
@@ -51,11 +52,34 @@ warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c]
   json="$(warp_parse_profile "$t")" || { [[ "$t" != "$src" ]] && rm -f "$t"; die "profile 解析失败，未做任何改动"; }
   [[ "$t" != "$src" ]] && rm -f "$t"
 
+  # ---- IPv6 决策：本机没有公网 IPv6 → 出站不配置 v6 ----
+  # 无 v6 的机器上内核 TUN 加 v6 地址/路由会失败 → 整个 WARP 出站起不来。
+  # 故按本机能力剔除 address / allowedIPs / remoteDNS 里的 v6 项，并把决策写进 state
+  # （.warp.ipv6），保证之后 rebuild 生成的出站可复现、不随环境漂移。
+  case "$ipv6" in
+    auto) if warp_local_has_public_ipv6; then ipv6="true"; else ipv6="false"; fi ;;
+    on)   ipv6="true" ;;
+    off)  ipv6="false" ;;
+    *)    die "--ipv6 取值非法: ${ipv6}（auto|on|off）" ;;
+  esac
+  if [[ "$ipv6" == "true" ]] && ! warp_local_has_public_ipv6; then
+    log_warn "本机未检测到公网 IPv6，但按 --ipv6 on 保留 v6 配置（内核 TUN 可能失败 → 失败时加 --no-tun 走 gVisor）"
+  fi
+  if [[ "$ipv6" == "false" ]]; then
+    local stripped
+    stripped="$(warp_strip_ipv6 "$json")" || die "剔除 IPv6 条目失败，未做任何改动"
+    [[ "$(jq -r '.address | length' <<<"$stripped")" -gt 0 ]] \
+      || die "profile 只有 IPv6 隧道地址，本机也没有公网 IPv6 —— 无法配置（可加 --ipv6 on 强制）"
+    json="$stripped"
+  fi
+  json="$(jq -c --argjson v "$ipv6" '. + {ipv6: $v}' <<<"$json")"
+
   # 回显摘要（私钥全程不出现），确认后才写 state
   echo >&2
   log_info "解析结果（私钥已隐藏）:"
   jq -r --arg tun "$tun" '
     "  接口地址 : " + (.address | join(", "))
+    + "\n  IPv6     : " + (if .ipv6 then "已配置" else "未配置（本机无公网 IPv6 → 已剔除 v6 地址/路由/DNS）" end)
     + "\n  MTU      : " + (.mtu | tostring)
     + "\n  DNS      : " + (if (.dns | length) == 0 then "（未指定，用 Xray 默认）" else (.dns | join(", ")) end)
     + "\n  对端     : " + .endpoint
@@ -90,6 +114,8 @@ warp_show() {
   jq -r '
     .warp as $w
     | "  接口地址 : " + ($w.address | join(", "))
+    + "\n  IPv6     : " + (if $w.ipv6 == null then "自动（老配置，按本机探测）"
+                         elif $w.ipv6 then "已配置" else "未配置（本机无公网 IPv6）" end)
     + "\n  MTU      : " + ($w.mtu | tostring)
     + "\n  DNS      : " + (if ($w.dns | length) == 0 then "（未指定，Xray 默认）" else ($w.dns | join(", ")) end)
     + "\n  对端     : " + $w.endpoint
@@ -169,6 +195,6 @@ warp_dispatch() {
     show)   warp_show ;;
     test)   warp_test "$@" ;;
     remove) warp_remove ;;
-    *)      die "warp 用法: setup [profile路径|-] [--no-tun] [--reserved a,b,c] | show | test [--net] | remove" ;;
+    *)      die "warp 用法: setup [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off] | show | test [--net] | remove" ;;
   esac
 }

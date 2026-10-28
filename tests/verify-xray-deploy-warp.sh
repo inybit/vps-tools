@@ -41,7 +41,9 @@ tmp="$(dirname "$src")/.nodisp.$$.sh"
 sed '/^# ============ 子命令分发/,$d' "$src" > "$tmp"
 source "$tmp"; rm -f "$tmp"
 STATE_FILE="$state"; CONFIG_FILE="$out"; BIN_PATH="$bin"
-service_restart() { :; }; need_root() { :; }
+service_restart() { :; }; need_root() { :; }; rebuild_and_reload() { :; }
+# warp setup 的确认交互：测试里恒答 y（不能靠 stdin，read_input 在有 tty 时读 /dev/tty）
+read_input() { printf -v "$2" "y"; return 0; }
 "$@"
 GENPROBE
 
@@ -146,7 +148,7 @@ mk_state() {  # $1=warp 开关(on|off) $2=chain(on|off) $3=额外 warp 字段（
                     public_key: "oXaK5pazZbzTPypmkGiEJBs4ofiHA-hncCU8wrmyhQQ",
                     sni: "www.example.com", short_id: "aabbccdd", short_ids: ["aabbccdd"] }]
     }
-    + (if $warp == "on" then { warp: ($w + { enabled: true, imported_at: "2026-10-28T00:00:00Z", source: "test" } + $extra) } else {} end)
+    + (if $warp == "on" then { warp: ($w + { enabled: true, imported_at: "2026-10-28T00:00:00Z", source: "test", ipv6: true } + $extra) } else {} end)
     + (if $chain == "on" then { chain: { role: "relay", mode: "ai", upstream: {
           type: "ss2022", name: "landing", address: "198.51.100.20", port: 8443,
           method: "2022-blake3-aes-256-gcm",
@@ -241,6 +243,66 @@ ck "info 显示 warp 规则"     "$(grep -c 'warp: geosite:cn' <<<"$INFO" || tru
 mk_state off off
 INFO2="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" cmd_info 2>&1)"
 ck "warp 关时 info 仍显示 block: geosite:cn" "$(grep -c 'block: geosite:cn' <<<"$INFO2" || true)" "1"
+echo
+
+# ---------- G. IPv6：本机无公网 IPv6 → 出站不配置 v6 ----------
+echo "[G] IPv6 裁剪（本机无公网 IPv6 → 出站不配置 v6）"
+IF6_NONE="$TMP/if_inet6.none"; IF6_PUB="$TMP/if_inet6.pub"
+printf '00000000000000000000000000000001 01 80 10 80       lo\nfe800000000000000000000000000001 02 40 20 80     eth0\nfd000000000000000000000000000001 03 40 00 80     eth0\n' > "$IF6_NONE"
+printf '2a0104f8000000000000000000000001 02 40 00 80     eth0\nfe800000000000000000000000000001 02 40 20 80     eth0\n' > "$IF6_PUB"
+
+has6() { WARP_IF_INET6_FILE="$1" bash "$GEN" "$MAIN" "$TMP/none.json" "$TMP/none.cfg" "$MOCKBIN/xray" \
+           warp_local_has_public_ipv6 >/dev/null 2>&1; echo $?; }
+ck "仅 lo + fe80 + ULA → 判定无公网 v6" "$(has6 "$IF6_NONE")" "1"
+ck "有 2a01: 全局地址 → 判定有"        "$(has6 "$IF6_PUB")" "0"
+ck "文件不存在 → 判定无"               "$(has6 "$TMP/not-here")" "1"
+
+# 本机探测结果注入（build_config 走 gen_warp_outbound）
+gen6() { WARP_IF_INET6_FILE="$1" bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" build_config >/dev/null 2>&1; }
+w6() { jq -r ".outbounds[] | select(.tag==\"warp\") | $1" "$CFG"; }
+
+mk_state on off '{"ipv6":false}'; gen6 "$IF6_PUB"
+ck "ipv6=false：address 只剩 v4"        "$(w6 '.settings.address | join(",")')" "172.16.0.2/32"
+ck "ipv6=false：allowedIPs 只剩 v4"     "$(w6 '.settings.peers[0].allowedIPs | join(",")')" "0.0.0.0/0"
+ck "ipv6=false：remoteDNS 只剩 v4 两条" "$(w6 '.settings.remoteDNS | length')" "2"
+ck "ipv6=false：整份配置无 ::/0"        "$(grep -c '::/0' "$CFG" || true)" "0"
+
+mk_state on off '{"ipv6":true}'; gen6 "$IF6_NONE"
+ck "ipv6=true：address 两条（本机无 v6 也不裁剪）" "$(w6 '.settings.address | length')" "2"
+ck "ipv6=true：allowedIPs 含 ::/0"                 "$(w6 '.settings.peers[0].allowedIPs | join(",")')" "0.0.0.0/0,::/0"
+ck "ipv6=true：remoteDNS 四条"                     "$(w6 '.settings.remoteDNS | length')" "4"
+
+# 老 state（无 .warp.ipv6）：按本机实时探测 → 无 v6 时自愈裁剪
+mk_state on off
+jq 'del(.warp.ipv6)' "$STATE" > "$TMP/old.json" && mv "$TMP/old.json" "$STATE"
+gen6 "$IF6_NONE"
+ck "老 state + 本机无 v6 → 自动裁剪" "$(w6 '.settings.address | length')" "1"
+gen6 "$IF6_PUB"
+ck "老 state + 本机有 v6 → 不裁剪"   "$(w6 '.settings.address | length')" "2"
+
+# setup 端到端：auto 探测无公网 v6 → state 记 ipv6=false 且已剔除 v6
+cp "$STATE" "$TMP/setup-state.json"
+WARP_IF_INET6_FILE="$IF6_NONE" bash "$GEN" "$MAIN" "$TMP/setup-state.json" "$TMP/setup.cfg" \
+  "$MOCKBIN/xray" warp_setup "$PROFILE" >/dev/null 2>&1
+ck "setup(auto,无 v6)：.warp.ipv6=false" "$(jq -r '.warp.ipv6' "$TMP/setup-state.json")" "false"
+ck "setup：address 无 v6"               "$(jq '[.warp.address[] | select(test(":"))] | length' "$TMP/setup-state.json")" "0"
+ck "setup：dns 无 v6"                   "$(jq '[.warp.dns[] | select(test(":"))] | length' "$TMP/setup-state.json")" "0"
+ck "setup：allowed_ips 无 v6"           "$(jq '[.warp.allowed_ips[] | select(test(":"))] | length' "$TMP/setup-state.json")" "0"
+ck "setup：show 标出「未配置」"         "$(WARP_IF_INET6_FILE="$IF6_NONE" bash "$GEN" "$MAIN" "$TMP/setup-state.json" "$TMP/setup.cfg" "$MOCKBIN/xray" warp_show 2>&1 | grep -c 'IPv6.*未配置' || true)" "1"
+
+# --ipv6 on 逃生门：本机无 v6 也强制保留
+cp "$STATE" "$TMP/setup-on.json"
+WARP_IF_INET6_FILE="$IF6_NONE" bash "$GEN" "$MAIN" "$TMP/setup-on.json" "$TMP/setup.cfg" \
+  "$MOCKBIN/xray" warp_setup "$PROFILE" --ipv6 on >/dev/null 2>&1
+ck "setup(--ipv6 on)：.warp.ipv6=true" "$(jq -r '.warp.ipv6' "$TMP/setup-on.json")" "true"
+ck "setup(--ipv6 on)：保留 v6 地址"    "$(jq '[.warp.address[] | select(test(":"))] | length' "$TMP/setup-on.json")" "1"
+
+# 有真 xray 时：裁剪后的配置也必须被 xray -test 接受（gen6 内部跑 build_config → -test）
+if [[ -n "$XRAY_BIN" && -x "$XRAY_BIN" ]]; then
+  mk_state on off '{"ipv6":false}'
+  gen6 "$IF6_PUB"
+  ck "ipv6=false：真 xray -test 接受裁剪后的配置" "$?" "0"
+fi
 echo
 
 echo "----------------------------------------------"

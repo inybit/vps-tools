@@ -81,6 +81,9 @@ warp_enabled
 gen_warp_outbound
 warp_write_state
 warp_read_pasted
+warp_local_has_public_ipv6
+warp_strip_ipv6
+warp_ipv6_enabled
 warp_setup
 warp_show
 warp_test
