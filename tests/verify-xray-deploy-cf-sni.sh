@@ -69,6 +69,15 @@ case "${1:-}:${2:-}" in
 esac
 exit 0
 STUBEOF
+cat > "$STUB/id" <<'STUBEOF'
+#!/usr/bin/env bash
+# 短路 root 判定：need_root 用 $(id -u)，GitHub Actions runner 是普通用户（非 root），
+# 不打桩则 cmd_reality_check 直接 die「需要 root」，[G] 段断言全错（2026-10-29 CI 实测）。
+[[ "${1:-}" == "-u" ]] && { echo 0; exit 0; }
+if [[ -x /usr/bin/id ]]; then exec /usr/bin/id "$@"; fi
+if [[ -x /bin/id ]]; then exec /bin/id "$@"; fi
+exit 0
+STUBEOF
 cat > "$STUB/openssl" <<'STUBEOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "x509" ]]; then
@@ -91,7 +100,7 @@ issuer="CN = R11"
 printf 'CONNECTED(00000003)\n---\nissuer=%s\nNew, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384\nALPN protocol: h2\nVerify return code: 0 (ok)\n-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n' "$issuer"
 exit 0
 STUBEOF
-chmod +x "$STUB/curl" "$STUB/getent" "$STUB/openssl"
+chmod +x "$STUB/curl" "$STUB/getent" "$STUB/openssl" "$STUB/id"
 
 # 探针：source 截断后的主脚本（不触发子命令分发），PATH 前置 stub
 PROBE="$TMP/probe.sh"
