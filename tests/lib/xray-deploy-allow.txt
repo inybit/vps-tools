@@ -73,6 +73,23 @@ _fallback_test_one
 confirm
 install_pkgs
 log_ok
+warp_key_valid
+warp_mask_key
+warp_list_json
+warp_parse_profile
+warp_enabled
+gen_warp_outbound
+warp_write_state
+warp_read_pasted
+warp_setup
+warp_show
+warp_test
+warp_remove
+warp_dispatch
+gen_outbound_wireguard
+build_base_rules_json
+routing_cn_tag
+main_menu
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---

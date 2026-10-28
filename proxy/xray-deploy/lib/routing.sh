@@ -12,14 +12,24 @@
 #   ads-all        广告
 #   bittorrent     BT（防滥用）
 #   geoip:private  私网（防内网探测）
-#   geosite:cn / geoip:cn  国内站点黑洞
-ROUTING_BASE_RULES='[
-  { "type": "field", "outboundTag": "block", "domain": ["geosite:category-ads-all"] },
-  { "type": "field", "outboundTag": "block", "protocol": ["bittorrent"] },
-  { "type": "field", "outboundTag": "block", "ip": ["geoip:private"] },
-  { "type": "field", "outboundTag": "block", "domain": ["geosite:cn"] },
-  { "type": "field", "outboundTag": "block", "ip": ["geoip:cn"] }
-]'
+#   cn             回国流量：默认黑洞；启用 WARP 后改走 wireguard 出站（见 routing_cn_tag）
+# ⚠️ 顺序即优先级（Xray 首次匹配生效）：block 底线在前，落地白名单居中，catch-all 最后。
+
+# 回国流量的目标 outbound：启用 WARP 时走 warp 出站，否则维持 blackhole（默认行为不变）
+routing_cn_tag() {
+  if warp_enabled; then printf '%s' "$WARP_OUTBOUND_TAG"; else printf 'block'; fi
+}
+
+# 生成底线规则（5 条）。warp 未启用时与历史行为逐字等价（cn 两条 → block）
+build_base_rules_json() {
+  jq -nc --arg cn "$(routing_cn_tag)" '[
+    { "type": "field", "outboundTag": "block", "domain": ["geosite:category-ads-all"] },
+    { "type": "field", "outboundTag": "block", "protocol": ["bittorrent"] },
+    { "type": "field", "outboundTag": "block", "ip": ["geoip:private"] },
+    { "type": "field", "outboundTag": $cn, "domain": ["geosite:cn"] },
+    { "type": "field", "outboundTag": $cn, "ip": ["geoip:cn"] }
+  ]'
+}
 
 # 预设模式 → 落地域名标签（空格分隔；"*" = 全部）。返回 1 = 未知模式
 routing_preset_domains() {
@@ -64,16 +74,16 @@ routing_current_mode() {
 # ⚠️ 顺序即优先级（Xray 首次匹配生效）：block 底线在前，落地白名单居中，catch-all 最后。
 # ⚠️ 无 chain 时不追加任何 landing 规则（单机模式行为与拆分前一致）。
 build_routing_rules_json() {
-  if ! jq -e '.chain.upstream' "$STATE_FILE" >/dev/null 2>&1; then
-    printf '%s' "$ROUTING_BASE_RULES"; return 0
-  fi
   local mode domains rules
+  rules="$(build_base_rules_json)"
+  if ! jq -e '.chain.upstream' "$STATE_FILE" >/dev/null 2>&1; then
+    printf '%s' "$rules"; return 0
+  fi
   mode="$(routing_current_mode)"
   if ! domains="$(routing_preset_domains "$mode")"; then
     log_warn "未知分流模式 '${mode}'，回退 all"
     mode=all; domains="*"
   fi
-  rules="$ROUTING_BASE_RULES"
   if [[ "$domains" == "*" ]]; then
     # all：catch-all 走落地
     jq -c --arg tag "$LANDING_OUTBOUND_TAG" \

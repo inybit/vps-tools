@@ -54,6 +54,7 @@ run "行为等价（入口/错误路径/真实函数）" tests/verify-xray-deplo
 run "latest 修复 + 防降级" tests/verify-xray-deploy-latest.sh
 run "ss2022 + chain 配置生成（含真实 xray -test）" tests/verify-xray-deploy-chain.sh
 run "分流模式（各 mode 规则形态 + 真实 xray -test）" tests/verify-xray-deploy-routing.sh
+run "WARP 回国出站（profile 解析/出站形态/路由三态/私钥不外泄）" tests/verify-xray-deploy-warp.sh
 run "xhttp3-nginx 协议（触点/nginx 门/冲突/unit/info）" tests/verify-xray-deploy-xhttp3-nginx.sh
 run "安装版本选择（分界判定/菜单/警示）" tests/verify-xray-deploy-version-select.sh
 run "hy2 自签证书指纹 pin（原语/片段互斥/向导/契约）" tests/verify-xray-deploy-hy2-pin.sh

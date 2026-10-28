@@ -127,24 +127,33 @@ protocol_to_inbound() {  # $1=协议参数 JSON → 输出 inbound JSON（数组
   esac
 }
 
-# 组装 outbounds：默认 freedom(direct) + blackhole(block)；配了链路则追加 landing
+# 组装 outbounds：默认 freedom(direct) + blackhole(block)；配了链路则追加 landing；
+# 启用 WARP 则追加 wireguard(warp)（回国流量出站，与 chain 正交）
 build_outbounds_json() {
   local base='[
     { "protocol": "freedom", "tag": "direct" },
     { "protocol": "blackhole", "tag": "block" }
   ]'
-  local landing
+  local landing warp
   landing="$(gen_landing_outbound 2>/dev/null || true)"
+  warp="$(gen_warp_outbound 2>/dev/null || true)"
   if [[ -n "$landing" ]]; then
-    jq -c --argjson l "$landing" '. + [$l]' <<<"$base"
-  else
-    printf '%s' "$base"
+    base="$(jq -c --argjson l "$landing" '. + [$l]' <<<"$base")"
   fi
+  if [[ -n "$warp" ]]; then
+    base="$(jq -c --argjson w "$warp" '. + [$w]' <<<"$base")"
+  fi
+  printf '%s' "$base"
 }
 
 build_config() {  # 从 state.json 聚合 inbounds + outbounds + routing
   # routing 规则生成见 lib/routing.sh（build_routing_rules_json）
-  local inbounds p outbounds rules
+  local inbounds p outbounds rules tmp_cfg
+  # ⚠️ 临时文件必须保留 .json 扩展名：Xray 26.10.21 起配置加载器**只按扩展名判格式**，
+  #    `-format=json` 不再能覆盖它 → 用 `config.json.tmp` 会直接报
+  #    "unsupported config file extension"，任何 rebuild 都会校验失败。
+  #    实测：26.9.9 可用、26.10.21 失效（详见 README「已知坑」）。
+  tmp_cfg="${CONFIG_FILE%.json}.tmp.json"
   inbounds="$(jq -c '.protocols[]' "$STATE_FILE" | while read -r p; do
     protocol_to_inbound "$p"
   done | jq -s -c .)"
@@ -162,16 +171,15 @@ build_config() {  # 从 state.json 聚合 inbounds + outbounds + routing
       routing: { domainStrategy: "IPIfNonMatch", rules: $rules },
       outbounds: $outbounds,
       inbounds: $inbounds
-    }' > "${CONFIG_FILE}.tmp"
+    }' > "$tmp_cfg"
 
   # 校验通过才生效（原子替换）
-  # 注意：xray 26.x 按扩展名判断格式，.tmp 后缀会报 "Failed to get format"，必须显式 -format=json
-  if "${BIN_PATH}" run -test -format=json -config "${CONFIG_FILE}.tmp" >/dev/null 2>&1; then
-    mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
+  if "${BIN_PATH}" run -test -format=json -config "$tmp_cfg" >/dev/null 2>&1; then
+    mv "$tmp_cfg" "${CONFIG_FILE}"
     chmod 600 "${CONFIG_FILE}"
     log_info "配置生成并校验通过: ${CONFIG_FILE}"
   else
-    rm -f "${CONFIG_FILE}.tmp"
+    rm -f "$tmp_cfg"
     die "配置校验失败（xray -test），已保留线上配置不变"
   fi
 }

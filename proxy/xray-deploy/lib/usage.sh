@@ -28,6 +28,9 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   sudo xray-deploy protocol add|remove|edit|list   多协议管理（vless-reality / vless-xhttp-reality / vless-xhttp / vless-xhttp3-nginx / hysteria2 / ss2022）
   xray-deploy chain show|setup|import|export|test|remove
                                    中转 + 落地（链式代理）管理
+  xray-deploy warp setup|show|test|remove
+                                   WARP 回国出站（WireGuard）：导入 wgcf-profile.conf 后
+                                   回国流量（geosite:cn + geoip:cn）不再 block，改走 WARP
   xray-deploy -v, --version        显示版本号
   xray-deploy -h, --help           显示本帮助
 
@@ -78,6 +81,19 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
   xray-deploy chain mode                        查看当前模式
   ⚠️ 底线 block 永远保留：广告 / BT / 私网 / 国内站点（cn）
   ⚠️ 新增 geosite 标签前须 curl 验证存在（MetaCubeX geo/geosite/<tag>.yaml）
+
+WARP 回国出站（WireGuard，1.14.0+）:
+  wgcf register && wgcf generate                 在任意机器生成 wgcf-profile.conf
+  sudo xray-deploy warp setup                    交互导入：读文件 或 直接粘贴（单独一行 EOF 结束）
+  sudo xray-deploy warp setup /root/wgcf-profile.conf
+  cat wgcf-profile.conf | sudo xray-deploy warp setup -
+  sudo xray-deploy warp setup <路径> --no-tun    强制 gVisor 用户态（LXC 上内核 TUN 常失败时用）
+  sudo xray-deploy warp show                     查看（私钥打码，末 4 位）
+  sudo xray-deploy warp test [--net]             配置层自检；--net 额外临时探测真实出口（warp=on）
+  sudo xray-deploy warp remove                   移除，回国流量回到 blackhole
+  说明: 只改 geosite:cn / geoip:cn 的目标出站（block → warp）；广告/BT/私网仍 block
+        隧道内目标必须是 IP → 域名由 profile 的 DNS 行（remoteDNS）在隧道内解析
+        内核 TUN 默认交给 Xray 自动检测（不写 noKernelTun 字段）
 
 客户端兼容性:
   Xray >= v26.9.8 的 REALITY 服务端要求客户端 ClientHello 携带 X25519MLKEM768：

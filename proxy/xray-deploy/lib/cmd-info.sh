@@ -126,8 +126,11 @@ cmd_info() {
   echo "  block: geosite:category-ads-all"
   echo "  block: bittorrent"
   echo "  block: geoip:private"
-  echo "  block: geosite:cn"
-  echo "  block: geoip:cn"
+  # 回国流量：启用 WARP 后不再黑洞，改走 wireguard 出站
+  local cn_tag
+  cn_tag="$(routing_cn_tag)"
+  echo "  ${cn_tag}: geosite:cn"
+  echo "  ${cn_tag}: geoip:cn"
   # 链路提示：配了 chain 则按分流模式追加落地/直出规则
   if jq -e '.chain.upstream' "$STATE_FILE" >/dev/null 2>&1; then
     local _m _d
@@ -142,6 +145,19 @@ cmd_info() {
       echo "  direct: tcp,udp（catch-all，其余直出）"
     fi
     echo "  分流模式: ${_m}（切换: xray-deploy chain mode <模式>）"
+  fi
+  # WARP 回国出站（私钥只显示末 4 位）
+  if warp_enabled; then
+    echo "----------------------------------------------"
+    echo "WARP 回国出站（WireGuard）: 已启用"
+    jq -r '.warp as $w
+      | "  对端     : " + $w.endpoint + "  ｜ MTU: " + ($w.mtu | tostring)
+      + "\n  接口地址 : " + ($w.address | join(", "))
+      + "\n  DNS      : " + (if ($w.dns | length) == 0 then "Xray 默认" else ($w.dns | join(", ")) end)
+      + "\n  私钥     : …" + ($w.private_key[-4:])
+      + "\n  内核 TUN : " + (if ($w.no_kernel_tun // null) == null then "自动（Xray 检测）" else "已禁用（gVisor）" end)' \
+      "$STATE_FILE"
+    echo "  详情: xray-deploy warp show ｜ 自检: sudo xray-deploy warp test"
   fi
   # 版本兼容警告：REALITY 客户端对 Xray >= 26.9.8 的兼容矩阵
   if jq -e '.protocols[] | select(.type=="vless-reality" or .type=="vless-xhttp-reality")' "$STATE_FILE" >/dev/null 2>&1; then
