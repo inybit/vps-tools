@@ -32,6 +32,14 @@ proto_add() {
     *) die "未实现的协议向导: ${type}" ;;
   esac
 
+  # REALITY 兜底闸门（2026-10-29）：向导里已过 check_reality_sni，这里只再判一次 CF 前置，
+  # 防将来新增调用点绕过闸门 —— dest 套 CF 会让本机变成 CF 端口转发器（流量被盗刷）
+  if [[ "$type" == "vless-reality" || "$type" == "vless-xhttp-reality" ]]; then
+    local gsni greason
+    gsni="$(jq -r '.sni // ""' <<<"$params")"
+    greason="$(cf_sni_gate "$gsni")" || die "REALITY SNI 校验未通过（${gsni}）: ${greason}"
+  fi
+
   # 追加到 state（参数对象），inbound 由 build_config 推导
   state_set --argjson p "$params" '.protocols += [$p]'
   # XHTTP3-NGINX 需重写 unit（RuntimeDirectory 预建 socket 目录；既有 unit 不含该指令）

@@ -42,12 +42,18 @@ fallback_region_candidates() {  # $1=国家码（如 DE）；无该地区候选�
 # HTTP 检查放宽：REALITY 回落只需 TLS 层正常；301/302 同站跳转、403 WAF 均可用，
 # 仅拒绝 4xx/5xx 服务错误与 000 连接失败（加 UA 降低 WAF 误杀）。
 test_fallback_domain() {
-  local domain="$1" out code
-  # TLS1.3 + H2 + X25519(隐含) + 非 Cloudflare + 证书有效
+  local domain="$1" out code cf
+  # TLS1.3 + H2 + X25519(隐含) + 非 CF 前置 + 证书有效
   out="$(echo | timeout 12 openssl s_client -connect "${domain}:443" -tls1_3 -alpn h2 -groups X25519 -servername "$domain" 2>&1 || true)"
   grep -qE "New, TLSv1\.3|Protocol: TLSv1\.3|Protocol  : TLSv1\.3" <<<"$out" || { echo "TLSv1.3 不支持"; return 1; }
   grep -qE "ALPN protocol: h2" <<<"$out" || { echo "不支持 H2"; return 1; }
-  grep -qi "cloudflare" <<<"$out" && { echo "Cloudflare CDN（不推荐）"; return 1; }
+  # CF 前置三路判定（响应头 / 解析 IP ∈ CF 段 / 证书签发者），见 lib/cdn-detect.sh
+  # 旧实现只 grep 证书签发者 → CF 改用 GTS(WE1/YE1)/InCommon/Sectigo 后实测 121 条候选
+  # 里 13 条 CF 前置全漏判（含 waseda.jp / ntu.edu.sg）→ 套 CF 的 dest 会让 REALITY 变转发器
+  if cf="$(cf_front_reason "$domain" "$out")"; then
+    echo "Cloudflare 前置（${cf}）"
+    return 1
+  fi
   grep -q "Verify return code: 0" <<<"$out" || { echo "证书校验失败"; return 1; }
   # 非跳转/非错误：接受 2xx/3xx；拒绝 000（连接失败）、4xx/5xx（服务错误）
   code="$(curl -sI --max-time 10 -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "https://${domain}/" 2>/dev/null || echo 000)"
@@ -88,6 +94,9 @@ select_fallback_domain() {
   # 1) 优先询问自有域名（偷自己，推荐度最高）
   read_input "如有自有域名可作回落（直接回车跳过）: " server_domain
   if [[ -n "$server_domain" ]]; then
+    # 2026-10-29：此前自有域名零校验直接放行 —— 套了 CF 的自有域名同样是盗刷通道
+    local chk
+    chk="$(check_reality_sni "$server_domain")" || die "自有域名 ${server_domain} 不可用作 REALITY 回落: ${chk}"
     echo "$server_domain"
     return 0
   fi
@@ -105,7 +114,7 @@ select_fallback_domain() {
   fi
 
   # 3) 逐个测试，通过即测握手延迟；最多收 6 个
-  log_info "正在测试回落候选（TLS1.3+H2+X25519+非跳转+非Cloudflare）..."
+  log_info "正在测试回落候选（TLS1.3+H2+X25519+非跳转+非 CF 前置）..."
   local tested=0 shown=0 delay
   for line in "${sorted_lines[@]}"; do
     [[ "$shown" -ge 6 ]] && break
@@ -138,5 +147,8 @@ select_fallback_domain() {
   i="${i:-1}"
   [[ "$i" =~ ^[0-9]+$ ]] && [[ "$i" -ge 1 ]] && [[ "$i" -le "${#candidates[@]}" ]] || die "无效选择"
   IFS='|' read -r dom note delay <<<"${candidates[$((i-1))]}"
+  # 最终确认前再过一遍完整闸门：候选已过 TLS/H2/CF，这里补「证书 SAN 覆盖」与 dest 可达
+  local chk2
+  chk2="$(check_reality_sni "$dom")" || die "回落域名 ${dom} 未通过 REALITY 校验: ${chk2}"
   echo "$dom"
 }

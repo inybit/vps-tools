@@ -59,7 +59,14 @@ Verify return code: 0 (ok)
 EOS
 exit 0
 STUBEOF
-chmod +x "$STUB/curl" "$STUB/openssl"
+cat > "$STUB/getent" <<'STUBEOF'
+#!/usr/bin/env bash
+# 零 DNS：一律返回非 CF 地址。2026-10-29 起 test_fallback_domain 会用 getent 判
+# 「解析 IP ∈ CF 段」（盗刷通道本体），不打桩就会真解析真实域名 → 套件依赖外网 DNS。
+echo "80.1.2.3 STREAM ${2:-stub}"
+exit 0
+STUBEOF
+chmod +x "$STUB/curl" "$STUB/openssl" "$STUB/getent"
 
 # 探针：source 截断后的主脚本（不触发子命令分发），PATH 前置 stub
 PROBE="$TMP/probe.sh"

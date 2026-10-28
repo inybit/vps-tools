@@ -17,9 +17,15 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
                                    本地区 = 本机所在国家（ipinfo/ip-api 自动识别）；
                                    跨地区要测全部候选时用 --all（121 条/10 地区，约半小时）；
                                    也可 --region <国家码> 指定地区，如 --region DE
+                                   判定：TLS1.3 + H2 + X25519 + 非跳转 + 非 CF 前置
+                                         （CF 用 cf-ray 头 / 解析 IP ∈ CF 段 / 证书签发者 三路判）
   xray-deploy fallback-cn-test [域名] 回落域名中国方向可达性检测（Globalping 探针；无参=全部 tier4 候选）
                                    需要外网访问 api.globalping.io；只读检测，不改部署状态
                                    **提交前需确认数据出境**（默认拒绝；自动化用 CN_TEST_ASSUME_YES=1）
+  xray-deploy reality-check        REALITY 的 SNI（= dest）体检：CF 前置 / TLS1.3+H2 / 证书覆盖 / dest 可达
+                                   只读不改配置。dest 套了 CF → 未鉴权流量被转发到 CF 边缘 IP，
+                                   本机变成 CF 免费转发器（流量被盗刷 + GFW 回源取证）
+                                   不合格时：sudo xray-deploy protocol edit <名称> → 选「改 SNI」
   sudo xray-deploy update-geo [--restart]  更新 geosite/geoip（原子替换：下载异常不覆盖线上文件）
                                    --restart = 更新后 xray -test 校验通过才重启服务（失败回滚）
   sudo xray-deploy geo-timer [install [OnCalendar]|status|remove]
@@ -54,7 +60,7 @@ xray-deploy ${VERSION} — Xray 一键部署/管理（vps-tools 生态）
                  ⚠️ 需【先装好 nginx】≥1.25.0 且含 --with-http_v3_module（未装则向导直接退出，不代为安装）
                  xray 只监听 Unix socket（/run/xray-deploy/<name>.socket），不监听任何端口
                  TLS/QUIC 与证书全部由 nginx 终结（本工具不管理证书）；端口由 nginx 独占
-                 nginx 配置由用户自行编写 —— `info` 会打印一份只读参考（含可粘贴的 grpc_pass 行）
+                 nginx 配置由用户自行编写 —— \`info\` 会打印一份只读参考（含可粘贴的 grpc_pass 行）
                  客户端：mihomo 需 v1.19.23+（alpn: [h3]）；sing-box 上游不支持 XHTTP
   hysteria2      Hysteria2 (hy2)（QUIC/UDP，官方默认端口 443 模拟 HTTP/3；自签证书+客户端证书指纹 pin，无需 CF token）
                  TCP/UDP 端口独立：与 REALITY 的 TCP 443 可共存；UDP 端口被占时向导会提示是否卸载冲突协议
