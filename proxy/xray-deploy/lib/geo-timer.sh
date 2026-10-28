@@ -42,6 +42,11 @@ Wants=network-online.target
 Type=oneshot
 # 失败（下载异常 / 尺寸闸 / xray -test 失败）→ 非 0 退出，systemd 记 failed；
 # 线上 geo 数据与服务保持原状（update_geo 内部回滚）
+# 显式把输出导到 journal：默认虽为 journal，但一旦发行版改 DefaultStandardOutput，
+# 定时任务失败时就会只剩 "Result=failed" 而无任何原因可查。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xray-deploy-geo
 ExecStart=${GEO_CMD_PATH} update-geo --quiet --restart
 EOF
   cat > "${GEO_UNIT_DIR}/${GEO_SERVICE_NAME}.timer" <<EOF

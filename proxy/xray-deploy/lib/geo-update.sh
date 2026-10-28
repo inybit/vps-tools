@@ -30,7 +30,10 @@ update_geo() {
     [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY}${url}"
     [[ $quiet -eq 0 ]] && log_info "更新 ${f}: ${url}"
     tmp="${INSTALL_DIR}/${f}.new"
-    if ! curl -fL --max-time 180 -o "$tmp" "$url"; then
+    # --quiet 时给 curl 加 -s：否则进度条会刷进 journal（timer 触发时尤其吵）
+    local -a copts=(-fL --max-time 180)
+    [[ $quiet -eq 1 ]] && copts+=(-s)
+    if ! curl "${copts[@]}" -o "$tmp" "$url"; then
       [[ ${#staged[@]} -gt 0 ]] && rm -f "${staged[@]}"
       rm -f "$tmp"
       log_err "${f} 下载失败（线上 geo 数据未改动）"
