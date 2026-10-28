@@ -12,6 +12,8 @@
 #   [F] 私钥不外泄：warp show / info 输出里私钥出现 0 次，且只露末 4 位
 #   [H] 内核 TUN 残留（换 key 场景）：v6 判定排除 wg0/wg1；策略路由清理只动表 10230-10240
 #       （mock ip 断言调用面 + 真内核 netns 实测，无权限时 SKIP）
+#   [I] warp test 的临时配置必须以 .json 结尾（26.10.21 起 -format=json 已被忽略）：
+#       mock 断言 -config 指向 .json 且不再传该 flag + 真 xray 在 netns 里跑通自检
 #
 # 用法: bash tests/verify-xray-deploy-warp.sh
 # 退出码: 0=全部通过
@@ -384,6 +386,40 @@ EONS
   ck "真内核：main 规则仍在"           "$(grep -c 'from all lookup main' <<<"$out")" "1"
 else
   echo "  [SKIP] 无 root 或 unshare -n 不可用，跳过真内核清理验证"; SKIP=$((SKIP+1))
+fi
+echo
+
+# ---------- I. warp test 的临时配置必须以 .json 结尾 ----------
+echo "[I] warp test 临时配置后缀（26.10.21 起 -format=json 已失效）"
+# I1) mock xray 记录收到的参数：断言 -config 指向 .json、且不再依赖 -format=json。
+#     回归背景：临时配置曾用 `mktemp .../warp-test.XXXXXX`（无后缀）+ `-format=json`，
+#     26.10.21 上该 flag 被忽略 → `-test` 与 `run` 双双失败 → 自检报「可能不支持
+#     wireguard 出站」（指向错误方向），--net 则误报「warp=无响应」。
+mk_state on off
+LOGBIN="$TMP/logbin"; mkdir -p "$LOGBIN"
+cat > "$LOGBIN/xray" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >> "${TMP}/xray-args.log"
+exit 0
+EOS
+chmod +x "$LOGBIN/xray"
+: > "$TMP/xray-args.log"
+dirs_before="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'warp-test.*' 2>/dev/null | wc -l)"
+out="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$LOGBIN/xray" warp_test 2>&1)"; rc=$?
+ck "mock：warp test 退出码 0"                 "$rc" "0"
+ck "mock：-config 指向 .json 结尾"            "$(grep -o -- '-config [^ ]*' "$TMP/xray-args.log" | tail -1 | grep -c '\.json$' || true)" "1"
+ck "mock：不再传 -format=json"                "$(grep -c -- '-format=json' "$TMP/xray-args.log" || true)" "0"
+ck "mock：临时目录已清理"                     "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'warp-test.*' 2>/dev/null | wc -l)" "$dirs_before"
+
+# I2) 真二进制跑一次：mock 返 0 掩盖不了格式问题，必须真 xray 才暴露。
+#     放 netns 里跑——`-test` 会真建内核 TUN 并漏一对 rule（os.Exit 不走 Close），
+#     隔离在 netns 里就不污染宿主机；netns 里 lo 默认 down，先拉起来。
+if [[ -n "$XRAY_BIN" && -x "$XRAY_BIN" ]] && [[ "$(id -u)" -eq 0 ]] && command -v unshare >/dev/null 2>&1; then
+  out="$(unshare -n -- bash -c 'ip link set lo up 2>/dev/null; bash "$1" "$2" "$3" "$4" "$5" warp_test' _ \
+        "$GEN" "$MAIN" "$STATE" "$CFG" "$XRAY_BIN" 2>&1)"; rc=$?
+  ck "真 xray：warp test 通过（修复前 26.10.21 必失败）" "$rc" "0"
+else
+  echo "  [SKIP] 无真 xray / 非 root / 无 unshare，跳过真二进制 warp test"; SKIP=$((SKIP+1))
 fi
 echo
 

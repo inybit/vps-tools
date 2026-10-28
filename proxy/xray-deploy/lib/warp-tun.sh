@@ -97,24 +97,27 @@ warp_test() {  # [--net]
   log_ok "出站字段: $(jq -r 'keys | join(",")' <<<"$ob")"
   [[ -x "$BIN_PATH" ]] || { log_warn "xray 二进制缺失（${BIN_PATH}），跳过 -test"; return 0; }
 
-  local tcfg tport=18080 pid out="" w i=0
-  tcfg="$(mktemp "${TMPDIR:-/tmp}/warp-test.XXXXXX")" || die "创建临时配置失败"
+  local tcfg tdir tport=18080 pid out="" w i=0
+  # ⚠️ 临时配置必须以 .json 结尾：xray 按扩展名判格式，且 **26.10.21 起 `-format=json`
+  #    已被忽略**（实测无后缀时加它只是把 "Failed to get format" 换成 "failed to read config"）。
+  #    `mktemp` 要求模板末尾就是 XXXXXX，不能写 `xxx.XXXXXX.json` → 先建临时目录，
+  #    再在目录里写固定名 config.json。
+  tdir="$(mktemp -d "${TMPDIR:-/tmp}/warp-test.XXXXXX")" || die "创建临时目录失败"
+  tcfg="${tdir}/config.json"
   jq -n --argjson ob "$ob" --argjson p "$tport" '{
     log: { loglevel: "warning" },
     inbounds: [{ tag: "socks-in", listen: "127.0.0.1", port: $p, protocol: "socks",
                  settings: { udp: false }, sniffing: { enabled: true, destOverride: ["http", "tls"] } }],
     outbounds: [$ob, { protocol: "freedom", tag: "direct" }]
   }' > "$tcfg"
-  if ! "${BIN_PATH}" run -test -format=json -config "$tcfg" >/dev/null 2>&1; then
-    rm -f "$tcfg"
-    die "配置校验失败（xray -test）—— 当前 Xray 版本可能不支持 wireguard 出站或 remoteDNS 字段"
+  if ! "${BIN_PATH}" run -test -config "$tcfg" >/dev/null 2>&1; then
+    rm -rf "$tdir"
+    die "配置校验失败（xray -test）—— 当前 Xray 版本可能不支持 wireguard 出站或 remoteDNS 字段；若 Xray ≥26.10.21 请确认临时配置以 .json 结尾"
   fi
   log_ok "配置校验通过（xray -test）"
-  if [[ $net -eq 0 ]]; then rm -f "$tcfg"; return 0; fi
+  if [[ $net -eq 0 ]]; then rm -rf "$tdir"; return 0; fi
 
-  # 注意：mktemp 生成的文件没有 .json 扩展名，必须显式 -format=json，
-  # 否则 xray run 报 "Failed to get format"，临时实例起不来、探测必然误报失败。
-  "${BIN_PATH}" run -format=json -config "$tcfg" >/dev/null 2>&1 &
+  "${BIN_PATH}" run -config "$tcfg" >/dev/null 2>&1 &
   pid=$!
   while (( i < 40 )); do
     # 临时实例已退出（配置/端口/TUN 问题）→ 立即停，别空转 20 秒再报“无响应”
@@ -126,7 +129,7 @@ warp_test() {  # [--net]
   done
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  rm -f "$tcfg"
+  rm -rf "$tdir"
   w="$(grep -m1 '^warp=' <<<"$out" | cut -d= -f2 || true)"
   if [[ "$w" == "on" ]]; then
     log_ok "出口探测: WARP 生效（warp=on，出口 IP $(grep -m1 '^ip=' <<<"$out" | cut -d= -f2)）"
