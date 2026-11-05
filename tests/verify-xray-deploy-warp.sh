@@ -5,7 +5,7 @@
 #   [A] profile 解析：v4+v6 CIDR、DNS、MTU、Endpoint、AllowedIPs；无前缀地址自动补 /32 //128
 #   [B] 校验拒绝：缺字段 / 非法 base64 / 多 [Peer] / Endpoint 无端口 / MTU 越界 —— 一律非 0 退出
 #   [C] 出站形态：protocol=wireguard、tag=warp、secretKey/address/peers/mtu/remoteDNS；
-#       **noKernelTun 默认不出现**（= Xray 自动检测，2026-10-28 用户决定）
+#       **noKernelTun 恒写出，缺省 = true（gVisor 用户态，1.18.0+）**；no_kernel_tun:false → 内核 TUN
 #   [D] 路由三态：warp 关 → cn 两条 block（历史行为）；warp 开 → cn 两条 warp、其余 block；
 #       warp 开 + chain → cn 仍 warp 且 catch-all 走落地
 #   [E] 真实 xray -test 接受该配置（无二进制时 SKIP，不计 FAIL）
@@ -173,12 +173,27 @@ ck "peers[0].publicKey"     "$(jq -r '.outbounds[] | select(.tag=="warp") | .set
 ck "peers[0].allowedIPs"    "$(jq -r '.outbounds[] | select(.tag=="warp") | .settings.peers[0].allowedIPs | join(",")' "$CFG")" "0.0.0.0/0,::/0"
 ck "mtu = 1280"             "$(jq '.outbounds[] | select(.tag=="warp") | .settings.mtu' "$CFG")" "1280"
 ck "remoteDNS 四条（= profile DNS）" "$(jq '.outbounds[] | select(.tag=="warp") | .settings.remoteDNS | length' "$CFG")" "4"
-ck "noKernelTun 默认不出现（= Xray 自动检测）" \
-  "$(jq -r '.outbounds[] | select(.tag=="warp") | .settings | has("noKernelTun")' "$CFG")" "false"
+ck "noKernelTun 缺省 = true（gVisor 用户态，1.18.0+）" \
+  "$(jq -r '.outbounds[] | select(.tag=="warp") | .settings.noKernelTun' "$CFG")" "true"
+
+mk_state on off '{"no_kernel_tun":false}'; gen
+ck "no_kernel_tun:false → noKernelTun=false（内核 TUN）" \
+  "$(jq -r '.outbounds[] | select(.tag=="warp") | .settings.noKernelTun' "$CFG")" "false"
 
 mk_state on off '{"no_kernel_tun":true}'; gen
-ck "--no-tun 时才写 noKernelTun=true" \
+ck "no_kernel_tun:true → noKernelTun=true" \
   "$(jq -r '.outbounds[] | select(.tag=="warp") | .settings.noKernelTun' "$CFG")" "true"
+
+# setup 端到端：默认 gVisor / --kernel-tun 切内核 TUN / --no-tun 兼容别名
+setup_tun() {  # $@=额外参数 → 输出 .warp.no_kernel_tun
+  cp "$STATE" "$TMP/setup-tun.json"
+  WARP_IF_INET6_FILE=/dev/null bash "$GEN" "$MAIN" "$TMP/setup-tun.json" "$TMP/setup.cfg" \
+    "$MOCKBIN/xray" warp_setup "$PROFILE" "$@" >/dev/null 2>&1
+  jq -r '.warp.no_kernel_tun' "$TMP/setup-tun.json"
+}
+ck "setup 默认写 no_kernel_tun=true（gVisor）" "$(setup_tun)" "true"
+ck "setup --kernel-tun 写 false（内核 TUN）"   "$(setup_tun --kernel-tun)" "false"
+ck "setup --no-tun 仍写 true（兼容别名）"      "$(setup_tun --no-tun)" "true"
 
 mk_state on off '{"reserved":[1,2,3]}'; gen
 ck "reserved 显式给出才写" \
@@ -241,12 +256,18 @@ mk_state on off
 SHOW="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" warp_show 2>&1)"
 ck "warp show 中私钥出现次数 = 0" "$(grep -cF "$PRIV" <<<"$SHOW" || true)" "0"
 ck "warp show 露末 4 位"          "$(grep -cF "…${PRIV: -4}" <<<"$SHOW" || true)" "1"
+ck "warp show 网络栈 = gVisor（缺省按新默认）" \
+  "$(grep -cF '网络栈   : gVisor 用户态（默认' <<<"$SHOW" || true)" "1"
 INFO="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" cmd_info 2>&1)"
 ck "info 中私钥出现次数 = 0" "$(grep -cF "$PRIV" <<<"$INFO" || true)" "0"
 ck "info 显示 warp 规则"     "$(grep -c 'warp: geosite:cn' <<<"$INFO" || true)" "1"
 mk_state off off
 INFO2="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" cmd_info 2>&1)"
 ck "warp 关时 info 仍显示 block: geosite:cn" "$(grep -c 'block: geosite:cn' <<<"$INFO2" || true)" "1"
+mk_state on off '{"no_kernel_tun":false}'
+SHOW_TUN="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" warp_show 2>&1)"
+ck "warp show 显式内核 TUN（no_kernel_tun:false）" \
+  "$(grep -cF '网络栈   : 内核 TUN（显式启用）' <<<"$SHOW_TUN" || true)" "1"
 echo
 
 # ---------- G. IPv6：本机无公网 IPv6 → 出站不配置 v6 ----------

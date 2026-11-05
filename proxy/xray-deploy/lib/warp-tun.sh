@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # warp-tun.sh — 内核 TUN 相关：残留清理（IPv6 策略路由表 ≥10230）+ 出站自检（warp test）
 #
+# 1.18.0 起 warp 出站默认走 gVisor 用户态（noKernelTun: true）→ **不建内核 TUN、不占 10230 表**，
+# 本文件的残留清理只对显式 `--kernel-tun` 的机器（以及升级前留下的残留）有意义。
+#
 # warp_test 放在本文件而不是 warp-cmd.sh：它验的正是「内核 TUN 能不能起来、出口是不是
 # WARP」，与残留清理同一主题；warp-cmd.sh 只留命令族分发（也避免单文件超 200 行）。
 #
@@ -91,10 +94,17 @@ warp_test() {  # [--net]
   local net=0; [[ "${1:-}" == "--net" ]] && net=1
   [[ -f "$STATE_FILE" ]] || die "尚未安装（state.json 不存在）"
   warp_enabled || die "WARP 未启用（先: sudo xray-deploy warp setup /root/wgcf-profile.conf）"
-  local ob
+  local ob tun
   ob="$(gen_warp_outbound)"
   [[ -n "$ob" ]] || die "生成 WARP 出站失败（state.json 的 .warp 不完整）"
   log_ok "出站字段: $(jq -r 'keys | join(",")' <<<"$ob")"
+  # 网络栈：默认 gVisor 用户态（1.18.0+，不建内核 TUN）；--kernel-tun 才走内核 TUN
+  tun="$(jq -r '.settings.noKernelTun' <<<"$ob")"
+  if [[ "$tun" == "true" ]]; then
+    log_info "网络栈: gVisor 用户态（不建内核 TUN → 不占 10230 表、不依赖 CAP_NET_ADMIN）"
+  else
+    log_warn "网络栈: 内核 TUN（显式启用）—— 起不来就按默认重导（gVisor）；残留清理: warp cleanup"
+  fi
   [[ -x "$BIN_PATH" ]] || { log_warn "xray 二进制缺失（${BIN_PATH}），跳过 -test"; return 0; }
 
   local tcfg tdir tport=18080 pid out="" w i=0

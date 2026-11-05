@@ -155,7 +155,8 @@ cmd_info() {
       + "\n  接口地址 : " + ($w.address | join(", "))
       + "\n  DNS      : " + (if ($w.dns | length) == 0 then "Xray 默认" else ($w.dns | join(", ")) end)
       + "\n  私钥     : …" + ($w.private_key[-4:])
-      + "\n  内核 TUN : " + (if ($w.no_kernel_tun // null) == null then "自动（Xray 检测）" else "已禁用（gVisor）" end)' \
+      + "\n  网络栈   : " + (if $w.no_kernel_tun == null then "gVisor 用户态（默认）"
+                           elif $w.no_kernel_tun then "gVisor 用户态" else "内核 TUN（显式启用）" end)' \
       "$STATE_FILE"
     echo "  详情: xray-deploy warp show ｜ 自检: sudo xray-deploy warp test"
   fi

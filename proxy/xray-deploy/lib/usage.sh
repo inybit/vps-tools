@@ -97,7 +97,7 @@ WARP 回国出站（WireGuard，1.15.0+）:
   sudo xray-deploy warp setup                    交互导入：读文件 或 直接粘贴（单独一行 EOF 结束）
   sudo xray-deploy warp setup /root/wgcf-profile.conf
   cat wgcf-profile.conf | sudo xray-deploy warp setup -
-  sudo xray-deploy warp setup <路径> --no-tun    强制 gVisor 用户态（LXC 上内核 TUN 常失败时用）
+  sudo xray-deploy warp setup <路径> --kernel-tun 改用内核 TUN（吞吐更高；LXC/容器里常建不起来）
   sudo xray-deploy warp setup <路径> --ipv6 on   强制保留 IPv6（默认 auto：本机无公网 IPv6 则剔除 v6）
   sudo xray-deploy warp show                     查看（私钥打码，末 4 位）
   sudo xray-deploy warp test [--net]             配置层自检；--net 额外临时探测真实出口（warp=on）
@@ -105,7 +105,8 @@ WARP 回国出站（WireGuard，1.15.0+）:
   sudo xray-deploy warp cleanup                  清理内核 TUN 残留（IPv6 表 ≥10230 的 rule/route）
   说明: 只改 geosite:cn / geoip:cn 的目标出站（block → warp）；广告/BT/私网仍 block
         隧道内目标必须是 IP → 域名由 profile 的 DNS 行（remoteDNS）在隧道内解析
-        内核 TUN 默认交给 Xray 自动检测（不写 noKernelTun 字段）
+        网络栈默认 gVisor 用户态（noKernelTun: true）：不依赖 CAP_NET_ADMIN / /dev/net/tun，
+        也不占内核 IPv6 策略路由表 10230 → LXC/OpenVZ/容器里兼容性最好；要峰值吞吐用 --kernel-tun
         本机无公网 IPv6 → 自动剔除 v6 隧道地址 / ::/0 路由 / v6 DNS（避免 TUN 建 v6 失败）
         判定「本机有公网 IPv6」时排除 Xray 自己的 wg0/wg1（旧 key 的隧道 v6 地址不算本机能力）
 

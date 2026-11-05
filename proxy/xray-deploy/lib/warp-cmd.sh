@@ -5,13 +5,18 @@
 # 私钥永不打印：setup 回显与 show 均只给末 4 位。
 
 # ============ 导入 ============
-warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off]
-  local src="" tun="null" reserved="" ipv6="auto" a t json yn
+# 网络栈默认 gVisor 用户态（noKernelTun: true，1.18.0+）：不依赖 CAP_NET_ADMIN /
+# /dev/net/tun，也不占内核 IPv6 策略路由表 10230 —— LXC / OpenVZ / 容器里内核 TUN
+# 常「有权限却建不起来」→ 出站静默失败，故默认取兼容性最好的一侧。
+# 要峰值吞吐（用户态网络栈单核吞吐低于内核 TUN）用 --kernel-tun 显式切回。
+warp_setup() {  # [profile路径|-] [--kernel-tun] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off]
+  local src="" tun="true" reserved="" ipv6="auto" a t json yn
   need_root
   [[ -f "$STATE_FILE" ]] || die "尚未安装，先运行: xray-deploy install"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --no-tun)   tun="true" ;;
+      --kernel-tun) tun="false" ;;   # 显式启用内核 TUN
+      --no-tun)     tun="true"  ;;   # 兼容别名（1.18.0 起已是默认）
       --reserved) reserved="${2:-}"; shift || true ;;
       --ipv6)     ipv6="${2:-auto}"; shift || true ;;
       -)          src="-" ;;
@@ -22,6 +27,7 @@ warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|o
 
   if [[ -z "$src" ]]; then
     log_info "WARP 回国出站配置（导入 wgcf-profile.conf）"
+    log_info "  网络栈默认 gVisor 用户态（兼容性最好）；要内核 TUN 吞吐用 --kernel-tun"
     log_info "  生成方式: wgcf register && wgcf generate → wgcf-profile.conf"
     echo "  1) 读取文件（默认 /root/wgcf-profile.conf）" >&2
     echo "  2) 直接粘贴内容" >&2
@@ -63,7 +69,7 @@ warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|o
     *)    die "--ipv6 取值非法: ${ipv6}（auto|on|off）" ;;
   esac
   if [[ "$ipv6" == "true" ]] && ! warp_local_has_public_ipv6; then
-    log_warn "本机未检测到公网 IPv6，但按 --ipv6 on 保留 v6 配置（内核 TUN 可能失败 → 失败时加 --no-tun 走 gVisor）"
+    log_warn "本机未检测到公网 IPv6，但按 --ipv6 on 保留 v6 配置（--kernel-tun 下内核 TUN 可能失败；默认 gVisor 无此限制）"
   fi
   if [[ "$ipv6" == "false" ]]; then
     local stripped
@@ -85,7 +91,8 @@ warp_setup() {  # [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|o
     + "\n  对端     : " + .endpoint
     + "\n  对端公钥 : …" + (.public_key[-4:])
     + "\n  允许路由 : " + (.allowed_ips | join(", "))
-    + "\n  内核 TUN : " + (if $tun == "null" then "自动（Xray 自行检测）" else "已禁用（gVisor 用户态）" end)' \
+    + "\n  网络栈   : " + (if $tun == "false" then "内核 TUN（显式启用，吞吐更高；LXC/容器里可能建不起来）"
+                         else "gVisor 用户态（默认，进程内；不依赖 CAP_NET_ADMIN / /dev/net/tun）" end)' \
     <<<"$json" >&2
   read_input "确认写入并启用（回国流量改走 WARP，不再 block）？[Y/n]: " yn || yn=""
   [[ "${yn,,}" == "n" ]] && { log_info "已取消"; return 0; }
@@ -122,7 +129,8 @@ warp_show() {
     + "\n  对端公钥 : …" + ($w.public_key[-4:])
     + "\n  私钥     : …" + ($w.private_key[-4:])
     + "\n  允许路由 : " + ($w.allowed_ips | join(", "))
-    + "\n  内核 TUN : " + (if ($w.no_kernel_tun // null) == null then "自动（Xray 检测）" else "已禁用（gVisor）" end)
+    + "\n  网络栈   : " + (if $w.no_kernel_tun == null then "gVisor 用户态（默认；老配置未显式设置）"
+                         elif $w.no_kernel_tun then "gVisor 用户态" else "内核 TUN（显式启用）" end)
     + "\n  导入来源 : " + ($w.source // "?") + "  @ " + ($w.imported_at // "?")
     + (if ($w.reserved // null) == null then "" else "\n  reserved : " + ($w.reserved | tostring) end)' "$STATE_FILE"
   echo "  自检: sudo xray-deploy warp test [--net] ｜ 移除: sudo xray-deploy warp remove"
@@ -151,6 +159,6 @@ warp_dispatch() {
     test)    warp_test "$@" ;;
     cleanup) warp_cleanup_stale_tun "$@" ;;
     remove)  warp_remove ;;
-    *)       die "warp 用法: setup [profile路径|-] [--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off] | show | test [--net] | cleanup [--dry-run] | remove" ;;
+    *)       die "warp 用法: setup [profile路径|-] [--kernel-tun|--no-tun] [--reserved a,b,c] [--ipv6 auto|on|off] | show | test [--net] | cleanup [--dry-run] | remove" ;;
   esac
 }
