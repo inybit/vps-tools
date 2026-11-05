@@ -9,10 +9,12 @@
 #   settings: secretKey / address[] / peers[].{endpoint,publicKey,allowedIPs} /
 #             mtu / remoteDNS[] / reserved[3] / noKernelTun
 #   · 隧道内目标**必须是 IP** → 域名由 remoteDNS 在隧道内解析（即 profile 的 DNS 行）
-#   · noKernelTun **省略** = Xray 自动检测（有 CAP_NET_ADMIN 用内核 TUN，否则 gVisor）。
-#     本工具默认不写该字段（用户 2026-10-28 决定「内核默认就好」）；
-#     文档明确警告自动检测在部分 LXC 上会误判 → 出站失败时用 `warp setup --no-tun` 强制 gVisor。
-#   · 内核 TUN 占 IPv6 路由表 10230，同机第二个 wireguard 出站顺延 10231，第三个实例会撞车。
+#   · noKernelTun **恒写出**，缺省 = true = gVisor 用户态（1.18.0 起，用户 2026-11-05 决定）。
+#     内核 TUN 要 CAP_NET_ADMIN + 可用 /dev/net/tun；Xray 的自动检测在部分 LXC 上会误判
+#     （有权限却用不了 TUN → 出站静默失败）。gVisor 纯用户态，无此依赖。
+#     要峰值吞吐时 `warp setup --kernel-tun` 显式切回内核 TUN（state 记 no_kernel_tun=false）。
+#   · 内核 TUN 占 IPv6 路由表 10230，同机第二个 wireguard 出站顺延 10231，第三个实例会撞车；
+#     gVisor 不建 TUN → 不占表、也不留策略路由残留。
 #
 # 私钥只存在于 state.json（600）与内存；show / info / 日志一律打码（末 4 位）。
 
@@ -150,7 +152,7 @@ gen_warp_outbound() {
   gen_outbound_wireguard "$WARP_OUTBOUND_TAG" "$w"
 }
 
-# 写 state：保留导入来源与时间；no_kernel_tun 为 null 时不落字段（= Xray 自动检测）
+# 写 state：保留导入来源与时间；no_kernel_tun 为 null 时不落字段（= 出站生成时按默认 gVisor）
 warp_write_state() {  # $1=parse 输出 JSON $2=来源描述 $3=no_kernel_tun(true|false|null)
   local tmp
   tmp="$(mktemp)" || return 1

@@ -238,6 +238,7 @@ sudo xray-deploy warp setup                    # 交互：读文件 或 直接�
 sudo xray-deploy warp setup /root/wgcf-profile.conf
 cat wgcf-profile.conf | sudo xray-deploy warp setup -
 sudo xray-deploy warp setup /root/wgcf-profile.conf --ipv6 on   # 强制保留 IPv6
+sudo xray-deploy warp setup /root/wgcf-profile.conf --kernel-tun # 改用内核 TUN（吞吐更高，LXC 里常失败）
 sudo xray-deploy warp show                     # 私钥打码（只露末 4 位）
 sudo xray-deploy warp test [--net]             # 配置层自检；--net 临时探测真实出口
 sudo xray-deploy warp remove                   # 回到 blackhole
@@ -256,10 +257,15 @@ profile → 出站字段映射：
 | `AllowedIPs` | `peers[0].allowedIPs` | |
 | `Endpoint` | `peers[0].endpoint` | |
 
-- **内核 TUN 不写进配置**：省略 `noKernelTun` = Xray 自动检测（有 `CAP_NET_ADMIN` 用内核 TUN，
-  否则进程内 gVisor）。Xray 文档明确警告自动检测在部分 LXC 上会误判（有权限却用不了 TUN，
-  出站静默失败）→ 那时加 `--no-tun` 重新导入即可强制 gVisor。
-  内核 TUN 占 IPv6 路由表 10230，同机第二个 wireguard 出站顺延 10231。
+- **默认 gVisor 用户态（1.18.0+）**：出站恒带 `noKernelTun: true` —— 纯进程内网络栈，
+  不需要 `CAP_NET_ADMIN` / `/dev/net/tun`，也不占内核 IPv6 策略路由表 10230。
+  Xray 的自动检测在部分 LXC / OpenVZ / 容器里会误判（有权限却用不了 TUN → 出站静默失败），
+  所以默认取兼容性最好的一侧。老 state 无 `no_kernel_tun` 字段时也按 gVisor 生成
+  （rebuild 即生效，无需迁移命令）。
+  代价：用户态网络栈单核吞吐低于内核 TUN（WARP 出口本身受 CF 限速，日常回国流量基本感知不到）；
+  要峰值吞吐用 `warp setup <profile> --kernel-tun`（state 记 `no_kernel_tun: false`）。
+  `--no-tun` 保留为兼容别名（等价于默认）。内核 TUN 占 IPv6 路由表 10230，同机第二个
+  wireguard 出站顺延 10231。
 - `reserved`（部分 WARP 账号需要由 client_id 派生的 3 字节）不在 profile 里，
   需要时 `warp setup ... --reserved 1,2,3`。
 - **IPv6 按本机能力自动裁剪（1.15.0+）**：`warp setup` 检测本机是否有公网 IPv6
@@ -268,7 +274,7 @@ profile → 出站字段映射：
   原因：无 v6 的机器上内核 TUN 加 v6 地址/路由会失败，整个 wireguard 出站起不来。
   逃生门 `--ipv6 on`（强制保留，本机无 v6 时告警）/ `--ipv6 off`（强制剔除）；默认 `auto`。
   旧 state 无 `.warp.ipv6` 字段时按本机实时探测（自愈），`warp show` 会标「自动（老配置）」。
-- **换 key 后必须清旧 key 的 v6 残留（1.16.0+ 自动做）**：Xray 内核 TUN 会在 IPv6 策略路由里
+- **换 key 后必须清旧 key 的 v6 残留（1.16.0+ 自动做；默认 gVisor 不建 TUN，本段只对 `--kernel-tun` 的机器相关）**：Xray 内核 TUN 会在 IPv6 策略路由里
   加 `from <隧道 v6> lookup 10230` / `oif wg0 lookup 10230` 两条 rule + `::/0` 路由。正常退出会删，
   但 **`xray run -test` 走 `os.Exit` 不执行 `Close()`** —— 而每次 rebuild 都要跑 `-test`，
   于是每 rebuild 漏一对 rule，无限累积。后果：① 旧 key 的 v6 地址痕迹留在内核里；
@@ -317,7 +323,7 @@ sudo xray-deploy update-geo [--restart]           # 手动更新；--restart = �
 
 ## 已知坑（部署前必读）
 
-- **`xray run -test` 会真建内核 TUN 却不清理**：它走 `os.Exit`，不执行 `kernelTun.Close()`，
+- **`xray run -test` 会真建内核 TUN 却不清理**（仅 `--kernel-tun` 的机器；默认 gVisor 不建 TUN，无此问题）：它走 `os.Exit`，不执行 `kernelTun.Close()`，
   于是每次 `-test`（= 每次 rebuild）在 IPv6 策略路由里漏一对 rule，优先级递减、无限累积
   （实测单机 13 对）。本工具已在 `rebuild_and_reload` 里清理表 10230–10240；手工排查用
   `ip -6 rule show | grep -E 'lookup 1023[0-9]|lookup 10240'`，或 `xray-deploy warp cleanup --dry-run`。

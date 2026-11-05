@@ -27,10 +27,15 @@ gen_outbound_ss2022() {
 
 # 生成 WARP 出站（WireGuard）
 # ⚠️ 字段名以官方文档 config/outbounds/wireguard 为准（2026-10-28 核对）：
-#    secretKey / address[] / peers[].{endpoint,publicKey,allowedIPs} / mtu / remoteDNS[]
+#    secretKey / address[] / peers[].{endpoint,publicKey,allowedIPs} / mtu / remoteDNS[] / noKernelTun
 # ⚠️ 隧道内目标必须是 IP：域名由 remoteDNS 在隧道内解析（= profile 的 DNS 行），
 #    故 routing 命中 geosite:cn 的域名会先被本 outbound 内的 DNS 解析成 IP。
-# ⚠️ noKernelTun / reserved 仅在 state 里显式存在时才写（默认省略 = Xray 自动检测）。
+# ⚠️ noKernelTun **恒写出**，缺省（老 state 无该字段）= true → gVisor 用户态（1.18.0 起）：
+#    不依赖 CAP_NET_ADMIN / /dev/net/tun，不占内核 IPv6 策略路由表 10230，
+#    LXC/OpenVZ/容器里兼容性最好（内核 TUN 在那些环境常「有权限却建不起来」→ 出站静默失败）。
+#    显式 false 才走内核 TUN（warp setup --kernel-tun）。
+# ⚠️ 判空必须写 `$w.no_kernel_tun == null`：jq 的 `//` 把 false 当空值 → `// true` 会把
+#    显式 false 翻成 true（lib/warp.sh 的 warp_ipv6_enabled 已踩过同一个坑）。
 # $1=tag $2=state.json 的 .warp JSON
 gen_outbound_wireguard() {
   local tag="$1" w="$2"
@@ -46,11 +51,11 @@ gen_outbound_wireguard() {
             publicKey: $w.public_key,
             allowedIPs: ($w.allowed_ips // ["0.0.0.0/0", "::/0"])
           }],
-          mtu: ($w.mtu // 1280)
+          mtu: ($w.mtu // 1280),
+          noKernelTun: (if $w.no_kernel_tun == null then true else $w.no_kernel_tun end)
         }
         + (if (($w.dns // []) | length) > 0 then { remoteDNS: $w.dns } else {} end)
         + (if ($w.reserved // null) != null then { reserved: $w.reserved } else {} end)
-        + (if ($w.no_kernel_tun // null) != null then { noKernelTun: $w.no_kernel_tun } else {} end)
       )
     }'
 }
