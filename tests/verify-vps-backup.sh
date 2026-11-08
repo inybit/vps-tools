@@ -705,19 +705,18 @@ chk "注册表存在 vps-backup 条目" "[[ -n '$REG_LINE' ]]"
 chk "第 5 字段无安装后子命令（空 = 无参进向导）" "[[ -z \"\$(cut -d'|' -f5 <<< '$REG_LINE')\" ]]"
 chk "env 模板指向 templates/ 且目标为 /etc/vps-backup.env" \
     "[[ \"\$(cut -d'|' -f3 <<< '$REG_LINE')\" == 'backup/vps-backup/templates/vps-backup.env.example' ]]"
-# extra_files 与磁盘逐项比对（漏列 = 安装不完整）
+# extra_files 与磁盘比对（v1.20.0 起整包按目录整拷，工具目录内文件不再登记）
 # shellcheck disable=SC2034  # EXTRA/DISK 仅用于紧随其后的 eval 断言
-# 条目两种格式：工具自己的文件 / `源:目标` 共享文件（如 lib/core.sh:lib/core.sh）。
-# 统一取【目标侧】再与磁盘比：共享文件的目标不在工具目录里，直接比会假红。
-EXTRA="$(cut -d'|' -f6 <<< "$REG_LINE" | tr ' ' '\n' \
-         | awk -F: '{d=(NF>1)?$2:$1; sub(/^backup\/vps-backup\//,"",d); print d}' \
-         | grep -v '^$' | sort)"
+# 第 6 字段只允许 `源:目标` 跨目录共享条目；工具自己的 lib/*.sh 由整包自动带上。
+EXTRA="$(cut -d'|' -f6 <<< "$REG_LINE" | tr ' ' '\n' | grep -v '^$' | sort)"
 # shellcheck disable=SC2034
 DISK="$(cd "$TOOL_DIR" && find lib -name '*.sh' | sort)"
-# ⚠️ 不能用 `comm -23 <<<A <<<B`：`<<<` 是重定向不是参数，两个 here-string 都重定向 stdin
-#    → comm 只剩 0 个文件操作数 → "missing operand"（coreutils 9.7 实测）。必须用进程替换。
-chk "extra_files 覆盖全部 lib/*.sh（无漏列）" "[[ -z \"\$(comm -23 <(printf '%s\\n' \"\$DISK\") <(printf '%s\\n' \"\$EXTRA\"))\" ]]"
-chk "extra_files 仅多出共享文件 lib/core.sh" "[[ \"\$(comm -13 <(printf '%s\\n' \"\$DISK\") <(printf '%s\\n' \"\$EXTRA\"))\" == 'lib/core.sh' ]]"
+chk "extra_files 不登记工具目录内 lib（整包整拷自带）" \
+    "[[ -z \"\$(printf '%s\\n' \"\$EXTRA\" | grep -v ':')\" ]]"
+chk "共享条目只有 lib/core.sh:lib/core.sh" \
+    "[[ \"\$EXTRA\" == 'lib/core.sh:lib/core.sh' ]]"
+chk "磁盘上 lib/*.sh 仍然存在（$(( $(printf '%s\n' "$DISK" | wc -l) )) 个，整包会全带上）" \
+    "[[ -n \"\$DISK\" ]]"
 chk "install.sh 版本已递增到 ≥1.7.0" "grep -qE '^VPS_TOOLS_VERSION=\"1\.(7|[89]|[1-9][0-9])\.[0-9]+\"' '$REPO/install.sh'"
 chk "README 工具清单含 vps-backup" "grep -q 'backup/vps-backup/' '$REPO/README.md'"
 chk "无硬编码密钥（脱敏铁律）" \

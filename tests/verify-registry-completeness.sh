@@ -95,7 +95,10 @@ print()
 #   源路径               目标 = 源剥掉工具目录前缀（工具自己的文件）
 #   源路径:目标相对路径   目标显式指定（跨目录共享文件，如 lib/core.sh:lib/core.sh）
 print("[R3] extra_files 登记的文件都存在")
-print("[R4] 磁盘上的 .sh/.tpl 都已登记")
+print("[R4] extra_files 只登记跨目录共享文件（工具目录内文件靠整包整拷）")
+# v1.20.0 解耦：整包快照按目录整拷（cp -a <工具目录>），工具目录内的 lib/、templates/
+# 不再需要登记。第 6 字段只允许 `源:目标` 形式的跨目录共享文件（如 lib/core.sh:lib/core.sh）。
+# 若有人把工具目录内的文件写回来，属于死数据：安装器会整包整拷一遍再单独拷一遍。
 for r in rows:
     if len(r) != 6:
         continue
@@ -107,25 +110,14 @@ for r in rows:
 
     if not entries:
         continue
-    tool_dir = os.path.dirname(os.path.join(REPO, script))
-    # 目标（相对工具目录）：有冒号取冒号后，否则 = 源相对工具目录
-    dsts = set()
-    for e in entries:
-        if ":" in e:
-            dsts.add(e.split(":", 1)[1])
-        else:
-            dsts.add(os.path.relpath(os.path.join(REPO, e), tool_dir))
-    disk = set()
-    for root, _dirs, files in os.walk(tool_dir):
-        for fn in files:
-            if not fn.endswith((".sh", ".tpl")):
-                continue
-            full = os.path.join(root, fn)
-            if os.path.abspath(full) == os.path.abspath(os.path.join(REPO, script)):
-                continue
-            disk.add(os.path.relpath(full, tool_dir))
-    unreg = sorted(disk - dsts)
-    ck(f"{name}: 磁盘文件无漏登记", not unreg, f"未登记: {unreg}")
+    tool_dir = os.path.dirname(script)
+    inside = [e for e in entries if e.split(":", 1)[0].startswith(tool_dir + "/")]
+    ck(f"{name}: 不登记工具目录内文件（整包整拷自带）", not inside,
+       f"应删除的冗余条目: {inside}")
+    bad_fmt = [e for e in entries if ":" not in e]
+    ck(f"{name}: 共享条目必须写成 源:目标", not bad_fmt, f"缺目标: {bad_fmt}")
+    empty_dst = [e for e in entries if ":" in e and not e.split(":", 1)[1].strip()]
+    ck(f"{name}: 共享条目目标非空", not empty_dst, f"目标为空: {empty_dst}")
 print()
 
 # R5: 版本号可被 installed_tool_version() 的正则读到

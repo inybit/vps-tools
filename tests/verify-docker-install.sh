@@ -296,8 +296,10 @@ chk "已删除 render.sh（模板交给上游）" "[[ ! -f '$TOOL_DIR/lib/render
 echo ""
 echo "=== [10] 注册表 + 安装器契约 ==="
 NLIBS=$(ls "$TOOL_DIR"/lib/*.sh | wc -l | tr -d ' ')
-chk "注册表 extra_files 含全部 $NLIBS 个 lib" \
-  "[[ \$(grep -o 'utils/docker-install/lib/[a-z-]*\.sh' '$REPO/install.sh' | sort -u | wc -l | tr -d ' ') -eq $NLIBS ]]"
+# v1.20.0 解耦：工具目录内 lib 不再登记进 TOOLS（整包按目录整拷，新增文件自动带上）
+chk "注册表不再登记工具目录内 lib" \
+  "[[ \$(grep -o 'utils/docker-install/lib/[a-z-]*\.sh' '$REPO/install.sh' | sort -u | wc -l | tr -d ' ') -eq 0 ]]"
+chk "工具目录内 lib 实际存在（整包会全带上）" "[[ $NLIBS -ge 1 ]]"
 chk "注册表不再引用 templates" "! grep -q 'docker-install/templates' '$REPO/install.sh'"
 chk "注册表不再引用 render.sh" "! grep -q 'docker-install/lib/render.sh' '$REPO/install.sh'"
 chk "README 工具清单含 docker-install" "grep -q 'docker-install' '$REPO/README.md'"

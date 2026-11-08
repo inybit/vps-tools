@@ -99,6 +99,19 @@ mk_remote() {
 reset_sandbox() { rm -rf "$T/usr/local/lib/vps-tools" "$T/usr/local/bin/vps-tools" "$T/etc"/*.env "$T/out"; }
 mk_install "$T/install.sh"; mk_remote
 
+# ---------- 整包快照注入（v1.20.0 起唯一安装路径，逐文件回退已移除）----------
+# VPS_TOOLS_TARBALL_ROOT 指向本地树：离线、0 次网络请求，且能精确控制文件内容。
+# 树 = 真实仓库副本（保留 README/结构，供 [E] 文档断言）+ 覆盖成 mock 工具脚本/模板。
+REPO_TREE="$T/repo"
+mkdir -p "$REPO_TREE"
+tar -C "$REPO" --exclude=.git -cf - . 2>/dev/null | tar -C "$REPO_TREE" -xf -
+cp "$T/install.sh" "$REPO_TREE/install.sh"
+printf '#!/usr/bin/env bash\necho "TOOL-EXECUTED $*"\n' > "$REPO_TREE/monitor/vnstat-monitor/vnstat-monitor.sh"
+cp "$T/env.example" "$REPO_TREE/monitor/vnstat-monitor/vnstat-monitor.env.example"
+printf '#!/usr/bin/env bash\necho "TOOL-EXECUTED $*"\n' > "$REPO_TREE/bench/vps-bench/vps-bench.sh"
+chmod +x "$REPO_TREE/monitor/vnstat-monitor/vnstat-monitor.sh" "$REPO_TREE/bench/vps-bench/vps-bench.sh"
+export VPS_TOOLS_TARBALL_ROOT="$REPO_TREE"
+
 echo "=== [A] 静态：install_tool 不再 exec 工具命令 ==="
 # 只看 install_tool 函数体；注释里引用旧写法是允许的，故用非注释行匹配
 chk "install_tool 无「exec 工具 setup」调用" \

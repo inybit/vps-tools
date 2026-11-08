@@ -419,12 +419,13 @@ PY
 )"
 chk "无文件超过 200 行"    "[[ -z \"\$OVER\" ]]"
 chk "注册表含 nginx-install" "grep -q 'nginx-install|web/nginx-install' '${REPO}/install.sh'"
-MISSING=""
+REG=""
 for f in "$TOOL_DIR"/lib/*.sh; do
   rel="web/nginx-install/lib/$(basename "$f")"
-  grep -q "$rel" "${REPO}/install.sh" || MISSING+=" $rel"
+  grep -q "$rel" "${REPO}/install.sh" && REG+=" $rel"
 done
-chk "extra_files 列全 lib/" "[[ -z \"\$MISSING\" ]]"
+# v1.20.0 解耦：工具目录内 lib 不再登记进 TOOLS（整包按目录整拷，新增文件自动带上）
+chk "注册表不再登记工具目录内 lib" "[[ -z \"\$REG\" ]]"
 chk "env 模板已注册"        "grep -q 'nginx-install.env.example' '${REPO}/install.sh'"
 DEAD="$(python3 - "$TOOL_DIR" <<'PY'
 import re, glob, sys, os
@@ -498,12 +499,8 @@ import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 out = []
 for fn in ('installed_self_version', 'remote_version', 'tools_fp_of', 'fetch_remote_install',
-           'self_running_version', 'ver_gt', 'reload_tools_registry', 'install_self',
-           # 2026-10-17 引入 ref（版本坐标）后 install_self 依赖这三个：
-           # 漏登记 → 函数不存在 → install_self 在 set -u 下提前失败（假红）
-           'installer_ref', 'base_url_for', 'record_installer_ref',
-           # 2026-10-17 引入整包下载后 install_self 又依赖它（harness 里置 TARBALL_DISABLED=1 短路）
-           'ensure_tarball'):
+           'self_running_version', 'ver_gt', 'reload_tools_registry', 'install_self'):
+    # v1.20.0 起 install_self 只走 BASE_URL 拉取：不再依赖 installer_ref / ensure_tarball
     m = re.search(r'^' + fn + r'\(\) \{.*?^\}', src, re.M | re.S)
     # EUID 是 bash 只读变量，替换成可 mock 的名字才能测非 root 分支
     out.append(m.group(0).replace('$EUID', '$FAKE_EUID'))
@@ -533,17 +530,9 @@ log_warn(){ :; }
 FAKE_EUID="$2"
 VPS_TOOLS_VERSION="9.9.9"
 BASE_URL="http://fake"
-# ref 相关变量（installer_ref/base_url_for 依赖）：默认分支 main，无 pin
 RAW_BASE="http://fake"
 DEFAULT_REF="main"
-ENV_REF=""
-CLI_REF=""
-ACTION="self-update"
 INSTALL_DIR="$SELF_T/root"
-# 整包下载短路：本 harness 只测 install_self 的版本/落盘逻辑，不走网络
-TARBALL_ROOT=""
-TARBALL_SRC=""
-TARBALL_DISABLED="1"
 VPS_TOOLS_CMD="$1"
 PATH="$SELF_T/fake:$PATH"
 install_self

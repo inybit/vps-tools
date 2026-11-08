@@ -10,11 +10,11 @@
 #   bash <(curl -sSL https://raw.githubusercontent.com/inybit/vps-tools/main/install.sh) update vnstat-monitor    # 更新指定工具
 #   bash <(curl -sSL https://raw.githubusercontent.com/inybit/vps-tools/main/install.sh) uninstall vnstat-monitor # 卸载指定工具
 #
-# 版本坐标（ref = 分支名或 tag 名；安装器与每个工具各有独立版本号）:
-#   install vps-backup --ref vps-backup-v1.4.0     # 装/回滚到指定工具版本
-#   update  vps-backup --ref main                  # 回到最新
-#   self-update --ref v1.13.0                      # 安装器回滚到指定版本
-#   VPS_TOOLS_REF=v1.14.0 bash install.sh install x   # 全局覆盖（工具与安装器同一 ref）
+# 版本策略（v1.20.0 起，2026-11-08 用户决定「彻底解耦」）:
+#   安装器与所有工具**始终跟 main**，只有整包快照一条安装路径。
+#   已移除：--ref / VPS_TOOLS_REF / .ref 版本固定 / self-update 回滚 / 逐文件回退下载。
+#   tag 仍随发版打（v<ver> / <tool>-v<ver>），只作发布里程碑与 notes 锚点，不再有
+#   「装某个 tag」的语义；要装历史版本请 git checkout 该 tag 后手工跑 install.sh。
 #
 # 特性:
 #   - 脚本下载到 /usr/local/lib/vps-tools/<tool>/ 下，与系统文件隔离，卸载干净
@@ -29,131 +29,87 @@
 
 set -euo pipefail
 
-# ============ 版本号（发布新功能时递增，供启动检查用） ============
-# ⚠️ 改了 TOOLS 清单（增删 lib/templates 附加文件）**必须同步递增本版本号**：
-#    install_self 依赖版本比对决定是否拉取远端 install.sh；版本没变 →
-#    已装副本报「已是最新」→ 运行中的旧 TOOLS 清单永久陈旧 → 新增文件永远装不上。
-#    2026-09-19 anthony_fr 实测：新增 lib/xhttp3.sh 但未升版，用户更新后
-#    xray-deploy 启动即崩（入口 source 缺文件）。回归守卫见
-#    tests/verify-install-tools-version-bump.sh（TOOLS 变更而版本未变 → FAIL）。
-VPS_TOOLS_VERSION="1.19.5"
+# ============ 版本号（改本文件时递增，供启动检查与 tag 命名用） ============
+# 版本号现在的用途：① 启动检查更新（比对远端 install.sh 的版本）② release tag 命名。
+#   改 install.sh（安装器逻辑 / TOOLS 元数据）仍需递增：tag 名唯一，同版本号对应
+#   两份内容会让 release 打 tag 失败（隐式守卫）。
+# ⚠️ 但**新增/删除工具目录内的文件（lib/、templates/）不再需要升版**：整包快照按目录
+#    整拷，TOOLS 第 6 字段只剩跨目录共享文件（2026-11-08 解耦，见上方注释）。
+#    回归守卫 tests/verify-install-tools-version-bump.sh 仍盯「TOOLS 块变了必须升版」。
+VPS_TOOLS_VERSION="1.20.0"
 
 # ============ 配置 ============
 GH_USER="inybit"
 GH_REPO="vps-tools"
-GH_BRANCH="main"                  # 默认跟踪分支（未指定 ref 时）
+GH_BRANCH="main"                  # 唯一坐标：安装器与所有工具始终跟 main
 GH_ORIGIN="https://raw.githubusercontent.com"
 RAW_BASE="${GH_ORIGIN}/${GH_USER}/${GH_REPO}"
-DEFAULT_REF="$GH_BRANCH"
-BASE_URL="${RAW_BASE}/${DEFAULT_REF}"   # 默认 ref 的基址（保持变量名，兼容既有测试的 sed 重写）
+DEFAULT_REF="$GH_BRANCH"               # 保留别名（多处拼接 URL 用；值恒为 main）
+BASE_URL="${RAW_BASE}/${DEFAULT_REF}"  # 保持变量名，兼容既有测试的 sed 重写
 
 INSTALL_DIR="/usr/local/lib/vps-tools"   # 脚本库根目录（与命令入口分离）
 CONFIG_DIR="/etc"                        # 配置目标目录
 CMD_DIR="/usr/local/bin"                 # 命令入口目录
 VPS_TOOLS_CMD="${CMD_DIR}/vps-tools"     # 管理命令入口
 
-# ============ 版本坐标（ref）============
-# 发布模型：安装器与每个工具各有独立版本号（见 README「版本与发布」）。
-#   - 安装器版本 = VPS_TOOLS_VERSION → git tag  v<ver>
-#   - 工具版本   = 各脚本内 VERSION 变量 → git tag  <tool>-v<ver>
-# 装哪个版本由 ref 决定（ref = 分支名或 tag 名，两者在 raw URL 里同形）：
-#   --ref <tag>            本次操作从该 ref 取文件。工具操作只影响该工具；
-#                          只有 `self-update --ref <tag>` 才影响安装器自身。
-#   VPS_TOOLS_REF=<tag>    全局覆盖（工具与安装器都从该 ref 取）。
-# 已装 ref 记录在 ${INSTALL_DIR}/<tool>/.ref 与 ${INSTALL_DIR}/.installer-ref，
-# 后续 update 沿用记录值 = **版本固定**；要回到最新须显式 `--ref main`。
-CLI_REF=""                    # 本次运行 --ref（main() 解析后赋值）
-ENV_REF="${VPS_TOOLS_REF:-}"  # 全局覆盖（环境变量）
-ACTION=""                     # 本次运行动作（main() 赋值，installer_ref 用）
+# ============ 下载基址（v1.20.0 起只有 main 一个坐标）============
+# 2026-11-08 用户决定「彻底解耦」：移除 --ref / VPS_TOOLS_REF / .ref 版本固定 /
+# self-update 回滚 / 逐文件回退下载。理由：安装器与工具的版本坐标一旦存在，
+# 就要维护「版本号 ↔ 内容」一一对应（否则 --ref 回滚拿到的东西不确定），
+# 结果每次改 install.sh 都被迫升版；而真正需要的只是「装最新的」。
+# 代价（用户明确接受）：线上被 main 改坏时无法一键回到上个版本，只能等修。
+# tag 仍随发版打，只作发布里程碑；要装历史版本：git checkout <tag> 后手工跑 install.sh。
 
-# ref 合法性：禁止空格/引号/路径穿越，避免拼出意外 URL
-ref_valid() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+base_url_for() {  # [ref] 省略 = 默认分支（参数仅为兼容旧调用点保留）
+  printf '%s/%s\n' "$RAW_BASE" "${1:-$DEFAULT_REF}"
 }
 
-base_url_for() {
-  printf '%s/%s\n' "$RAW_BASE" "$1"
-}
-
-# 某工具本次使用的 ref（优先级：--ref > VPS_TOOLS_REF > 已装记录 > 默认分支）
-tool_ref() {  # $1=工具名
-  local name="$1" f="${INSTALL_DIR}/${name}/.ref" r=""
-  if [[ -n "$CLI_REF" ]]; then echo "$CLI_REF"; return 0; fi
-  if [[ -n "$ENV_REF" ]]; then echo "$ENV_REF"; return 0; fi
-  [[ -r "$f" ]] && r="$(head -1 "$f" 2>/dev/null || true)"
-  [[ -n "$r" ]] || r="$DEFAULT_REF"
-  echo "$r"
-}
-
-# 安装器自身使用的 ref
-# ⚠️ CLI_REF 只对 `self-update` 生效：`install vps-backup --ref vps-backup-v1.4.0`
-#    若连带把安装器也降到那个 tag 的 install.sh，等于悄悄降级安装器。
-installer_ref() {
-  if [[ -n "$ENV_REF" ]]; then echo "$ENV_REF"; return 0; fi
-  if [[ "$ACTION" == "self-update" && -n "$CLI_REF" ]]; then echo "$CLI_REF"; return 0; fi
-  local f="${INSTALL_DIR}/.installer-ref" r=""
-  [[ -r "$f" ]] && r="$(head -1 "$f" 2>/dev/null || true)"
-  [[ -n "$r" ]] || r="$DEFAULT_REF"
-  echo "$r"
-}
-
-# 记录某工具实际安装的 ref（供后续 update 沿用；失败不阻塞安装）
-record_tool_ref() {  # $1=工具名 $2=ref
-  printf '%s\n' "$2" > "${INSTALL_DIR}/${1}/.ref" 2>/dev/null || true
-}
-
-# 记录安装器自身跟的 ref（被 pin 到 tag 后，后续自更新只跟该 tag，不会被拉回 main）
-record_installer_ref() {  # $1=ref
-  mkdir -p "${INSTALL_DIR}" 2>/dev/null || true
-  printf '%s\n' "$1" > "${INSTALL_DIR}/.installer-ref" 2>/dev/null || true
-}
-
-# ============ 整包快照（tarball）下载 ============
+# ============ 整包快照（tarball）下载（v1.20.0 起是唯一安装路径）============
 # 逐文件下载的瓶颈是**请求数 × RTT**，不是字节数：每个 curl 都是独立连接，
 # TCP+TLS 握手 ≈ 3 RTT。xray-deploy 要 28 次（主脚本 1 + lib 27），
 # 200ms RTT 的 VPS 上光握手就 ~17s；而整仓 tar.gz 只有 ~280KB。
-# 故改为一次拉整包、本地解包、拷工具目录；一次运行内按 ref 缓存复用。
-# 失败（codeload 被墙 / 无 tar / 解包异常）自动回退逐文件下载，行为与旧版一致。
-# VPS_TOOLS_NO_TARBALL=1 强制关闭（出问题时的逃生开关）。
-TARBALL_ROOT="${VPS_TOOLS_TARBALL_ROOT:-}"         # 本次运行的缓存根（mktemp -d）
+# 故一次拉整包、本地解包、按目录整拷工具目录（cp -a）→ 工具目录内的新文件自动带上。
+# ⚠️ 逐文件回退路径已移除（v1.20.0，2026-11-08 用户决定）：整包拿不到就报错，
+#    逃生办法是手动注入已解包的树：VPS_TOOLS_TARBALL_ROOT=<含 install.sh 的目录>。
+SRC_OVERRIDE="${VPS_TOOLS_TARBALL_ROOT:-}"         # 手动注入的已解包仓库根（codeload 不可达时）
+TARBALL_ROOT="${VPS_TOOLS_TARBALL_CACHE:-}"        # 本次运行的整包缓存根（mktemp -d）
 TARBALL_SRC=""                                    # 最近一次 ensure_tarball 成功的仓库根
-TARBALL_DISABLED="${VPS_TOOLS_NO_TARBALL:-0}"     # 1 = 永不用整包
 
-# 确保某 ref 的整包已解包。成功 return 0 并设置全局 TARBALL_SRC。
-# ⚠️ 必须**直接调用**，不能写 `src="$(ensure_tarball ...)"`：命令替换会开子 shell，
+# 确保整包已解包。成功 return 0 并设置全局 TARBALL_SRC；失败 return 1（调用方负责报错）。
+# ⚠️ 必须**直接调用**，不能写 `src="$(ensure_tarball)"`：命令替换会开子 shell，
 #    TARBALL_ROOT / .ok 缓存 / EXIT trap 全落在子 shell 里 —— 子 shell 一退出就触发
-#    trap 删掉刚解包的树，父进程拿到的是**已消失的路径** → 每次都静默回退逐文件，
-#    而且整包会被下载两次（2026-10-17 实测踩到）。
-ensure_tarball() {  # $1=ref
+#    trap 删掉刚解包的树，父进程拿到的是**已消失的路径** → 整包会被下载两次
+#    （2026-10-17 实测踩到）。
+ensure_tarball() {
   TARBALL_SRC=""
-  [[ "$TARBALL_DISABLED" != "1" ]] || return 1
+  # 手动注入优先：VPS_TOOLS_TARBALL_ROOT 指向已解包的仓库根（必须含 install.sh）
+  if [[ -n "$SRC_OVERRIDE" && -f "${SRC_OVERRIDE}/install.sh" ]]; then
+    TARBALL_SRC="$SRC_OVERRIDE"
+    return 0
+  fi
   command -v tar >/dev/null 2>&1 || return 1
-  local ref="$1" dir root tgz d
+  local dir root tgz d
   if [[ -z "$TARBALL_ROOT" ]]; then
-    TARBALL_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vps-tools-src.XXXXXX")" || {
-      TARBALL_DISABLED=1; return 1
-    }
+    TARBALL_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vps-tools-src.XXXXXX")" || return 1
     # 只清理自己创建的临时目录（不碰任何系统目录）
     trap '[[ -n "${TARBALL_ROOT:-}" && -d "${TARBALL_ROOT}" ]] && rm -rf "${TARBALL_ROOT}" || true' EXIT
   fi
-  dir="${TARBALL_ROOT}/$(printf '%s' "$ref" | tr '/ ' '__')"
+  dir="${TARBALL_ROOT}/src"
   if [[ -f "${dir}/.ok" ]]; then
     TARBALL_SRC="$(cat "${dir}/.ok")"
     return 0
   fi
-  # 同一 ref 已失败过 → 直接回退，避免每个工具都等一次超时
+  # 同一运行内已失败过 → 直接失败，避免每个工具都等一次超时
   if [[ -f "${dir}/.failed" ]]; then return 1; fi
 
   mkdir -p "$dir"
   tgz="${dir}/src.tgz"
   if ! curl -fsSL --max-time 120 \
-        "https://codeload.github.com/${GH_USER}/${GH_REPO}/tar.gz/${ref}" \
+        "https://codeload.github.com/${GH_USER}/${GH_REPO}/tar.gz/${GH_BRANCH}" \
         -o "$tgz" 2>/dev/null; then
-    log_warn "整包下载失败（ref: ${ref}），回退逐文件下载"
     : > "${dir}/.failed"; rm -f "$tgz"; return 1
   fi
   if ! tar -xzf "$tgz" -C "$dir" 2>/dev/null; then
-    log_warn "整包解压失败（ref: ${ref}），回退逐文件下载"
     : > "${dir}/.failed"; rm -f "$tgz"; return 1
   fi
   rm -f "$tgz"
@@ -164,7 +120,6 @@ ensure_tarball() {  # $1=ref
     [[ -d "$d" ]] && { root="${d%/}"; break; }
   done
   if [[ -z "$root" || ! -f "${root}/install.sh" ]]; then
-    log_warn "整包结构异常（ref: ${ref}），回退逐文件下载"
     : > "${dir}/.failed"; return 1
   fi
   printf '%s\n' "$root" > "${dir}/.ok"
@@ -185,9 +140,11 @@ ensure_tarball() {  # $1=ref
 #                  导致 docker-install / vps-backup 被提示跑并不存在的 `setup` 子命令。
 #               ⚠️ 一旦安装就自动跑工具会「在安装流程里插入交互提问 + 改变机器状态」，
 #                  且旧实现只对首次安装（env 新生成）触发，行为不一致难以预期。
-#   extra_files 主脚本之外的附加文件（空格分隔的相对路径清单；多文件工具如
-#               vps-init 的 lib/*.sh 和 templates/*.tpl 必须在此列出，否则安装不完整；
-#               可为空 = 单文件工具）
+#   extra_files **只写跨目录共享文件**（`源路径:工具内目标路径`，如 lib/core.sh:lib/core.sh）。
+#               工具目录内的 lib/、templates/ 等文件**不再登记**：整包快照按目录整拷
+#               （cp -a <工具目录>），新增文件自动带上 → 新增 lib 不必改本文件、
+#               不必升 VPS_TOOLS_VERSION（2026-11-08 用户要求「彻底解耦」）。
+#               可为空 = 无共享文件。
 # 注：定时调度统一用 systemd timer（工具脚本 setup 子命令管理），不使用 crontab。
 #
 # 分类目录约定（新增脚本按功能域归类）:
@@ -200,12 +157,12 @@ ensure_tarball() {  # $1=ref
 #   bench/     测试类（测速/基准）
 TOOLS=(
   "vnstat-monitor|monitor/vnstat-monitor/vnstat-monitor.sh|monitor/vnstat-monitor/vnstat-monitor.env.example|${CONFIG_DIR}/vnstat-monitor.env|setup|"
-  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|proxy/xray-deploy/lib/common.sh proxy/xray-deploy/lib/service.sh proxy/xray-deploy/lib/cdn-detect.sh proxy/xray-deploy/lib/fallback-data.sh proxy/xray-deploy/lib/fallback.sh proxy/xray-deploy/lib/sni-check.sh proxy/xray-deploy/lib/keys.sh proxy/xray-deploy/lib/xray-bin.sh proxy/xray-deploy/lib/registry.sh proxy/xray-deploy/lib/client-mihomo.sh proxy/xray-deploy/lib/client-singbox.sh proxy/xray-deploy/lib/client-ss2022.sh proxy/xray-deploy/lib/inbound.sh proxy/xray-deploy/lib/state.sh proxy/xray-deploy/lib/ss2022.sh proxy/xray-deploy/lib/outbound.sh proxy/xray-deploy/lib/warp.sh proxy/xray-deploy/lib/warp-tun.sh proxy/xray-deploy/lib/warp-cmd.sh proxy/xray-deploy/lib/warp-endpoint.sh proxy/xray-deploy/lib/menu.sh proxy/xray-deploy/lib/routing.sh proxy/xray-deploy/lib/chain.sh proxy/xray-deploy/lib/chain-info.sh proxy/xray-deploy/lib/proto-wizard.sh proxy/xray-deploy/lib/xhttp3.sh proxy/xray-deploy/lib/proto-crud.sh proxy/xray-deploy/lib/proto-edit.sh proxy/xray-deploy/lib/cmd-lifecycle.sh proxy/xray-deploy/lib/cmd-upgrade.sh proxy/xray-deploy/lib/cmd-info.sh proxy/xray-deploy/lib/cmd-fallback.sh proxy/xray-deploy/lib/globalping.sh proxy/xray-deploy/lib/geo-update.sh proxy/xray-deploy/lib/geo-timer.sh proxy/xray-deploy/lib/usage.sh lib/core.sh:lib/core.sh"
-  "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env||utils/vps-init/lib/common.sh utils/vps-init/lib/sshkey.sh utils/vps-init/lib/dd.sh utils/vps-init/lib/system.sh utils/vps-init/lib/user.sh utils/vps-init/lib/ssh.sh utils/vps-init/lib/fail2ban.sh utils/vps-init/lib/ufw.sh utils/vps-init/templates/sshd-dropin.conf.tpl utils/vps-init/templates/jail.local.tpl lib/core.sh:lib/core.sh"
+  "xray-deploy|proxy/xray-deploy/xray-deploy.sh|||install|lib/core.sh:lib/core.sh"
+  "vps-init|utils/vps-init/vps-init.sh|utils/vps-init/vps-init.env.example|${CONFIG_DIR}/vps-init.env||lib/core.sh:lib/core.sh"
   "vps-bench|bench/vps-bench/vps-bench.sh|||nodequality|"
-  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env||utils/docker-install/lib/common.sh utils/docker-install/lib/install.sh utils/docker-install/lib/firewall.sh utils/docker-install/lib/firewall-rules.sh utils/docker-install/lib/access.sh utils/docker-install/lib/usage.sh utils/docker-install/lib/lockdown.sh utils/docker-install/lib/ufwdocker.sh lib/core.sh:lib/core.sh"
-  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env||web/nginx-install/lib/common.sh web/nginx-install/lib/keys.sh web/nginx-install/lib/repo.sh web/nginx-install/lib/install.sh web/nginx-install/lib/status.sh web/nginx-install/lib/usage.sh lib/core.sh:lib/core.sh"
-  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env||backup/vps-backup/lib/common.sh backup/vps-backup/lib/pkg.sh backup/vps-backup/lib/restic.sh backup/vps-backup/lib/cache.sh backup/vps-backup/lib/exclude.sh backup/vps-backup/lib/paths.sh backup/vps-backup/lib/deps.sh backup/vps-backup/lib/repo.sh backup/vps-backup/lib/backup.sh backup/vps-backup/lib/retention.sh backup/vps-backup/lib/restore.sh backup/vps-backup/lib/remote.sh backup/vps-backup/lib/timer.sh backup/vps-backup/lib/status.sh backup/vps-backup/lib/usage.sh lib/core.sh:lib/core.sh"
+  "docker-install|utils/docker-install/docker-install.sh|utils/docker-install/docker-install.env.example|${CONFIG_DIR}/docker-install.env||lib/core.sh:lib/core.sh"
+  "nginx-install|web/nginx-install/nginx-install.sh|web/nginx-install/nginx-install.env.example|${CONFIG_DIR}/nginx-install.env||lib/core.sh:lib/core.sh"
+  "vps-backup|backup/vps-backup/vps-backup.sh|backup/vps-backup/templates/vps-backup.env.example|${CONFIG_DIR}/vps-backup.env||lib/core.sh:lib/core.sh"
 )
 
 # ============ 辅助函数 ============
@@ -227,16 +184,15 @@ ver_gt() {  # $1 > $2 返回 0
 
 # 启动检查更新：比对远端 install.sh 版本号，有新版返回 0 并提示；离线/同版本返回 1（静默）
 check_update() {
-  local remote ref
-  ref="$(installer_ref)"
+  local remote
   remote="$(remote_version)"
   [[ -n "$remote" ]] || return 1
   if ver_gt "$remote" "$VPS_TOOLS_VERSION"; then
-    log_warn "检测到新版本 vps-tools ${remote}（当前 ${VPS_TOOLS_VERSION}，ref: ${ref}）"
+    log_warn "检测到新版本 vps-tools ${remote}（当前 ${VPS_TOOLS_VERSION}）"
     # ⚠️ 提示顺序很重要：**先给管道方式**。旧副本（< 1.7.1）的「菜单选 5」自身有 bug
     #    （拿副本自己跟自己比版本 → 恒报已最新，永远拉不到新版），
     #    所以对尚未修复的机器，选 5 是无效指引。
-    log_warn "更新方式: curl -sSL $(base_url_for "$ref")/install.sh | sudo bash"
+    log_warn "更新方式: curl -sSL ${BASE_URL}/install.sh | sudo bash"
     log_warn "  （已装 v1.7.1+ 的机器也可用「菜单选 5 / vps-tools self-update」）"
     return 0
   fi
@@ -283,22 +239,14 @@ installed_tool_version() {  # $1=注册表行
   sed -n 's/^[A-Za-z_]*VERSION="\([0-9][0-9.]*\)".*/\1/p' "$f" | head -1
 }
 
-# 已装工具的 ref 记录（空 = 未记录，视为默认分支）
-installed_tool_ref() {  # $1=工具名
-  local f="${INSTALL_DIR}/${1}/.ref"
-  [[ -r "$f" ]] || return 0
-  head -1 "$f" 2>/dev/null || true
-}
-
 list_tools() {
   log_info "可用工具:"
-  local line name ver ref
+  local line name ver
   for line in "${TOOLS[@]}"; do
     name=$(tool_field "$line" 1)
     if [[ -d "${INSTALL_DIR}/${name}" ]]; then
       ver="$(installed_tool_version "$line")"
-      ref="$(installed_tool_ref "$name")"
-      echo "  - ${name}  ($(tool_field "$line" 2))  已装 v${ver:-?}${ref:+ @${ref}}"
+      echo "  - ${name}  ($(tool_field "$line" 2))  已装 v${ver:-?}"
     else
       echo "  - ${name}  ($(tool_field "$line" 2))"
     fi
@@ -307,17 +255,13 @@ list_tools() {
 
 # ============ 核心操作 ============
 install_tool() {  # $1=tool line
-  local line="$1" name script env_tpl env_tgt post_install extra_files ref base
+  local line="$1" name script env_tpl env_tgt post_install extra_files
   name=$(tool_field "$line" 1)
   script=$(tool_field "$line" 2)
   env_tpl=$(tool_field "$line" 3)
   env_tgt=$(tool_field "$line" 4)
   post_install=$(tool_field "$line" 5)
   extra_files=$(tool_field "$line" 6)
-
-  # 版本坐标：本次从哪个 ref 取文件（--ref > VPS_TOOLS_REF > 已装记录 > main）
-  ref="$(tool_ref "$name")"
-  base="$(base_url_for "$ref")"
 
   local dest="${INSTALL_DIR}/${name}"
   local script_dir
@@ -328,114 +272,55 @@ install_tool() {  # $1=tool line
 
   mkdir -p "$dest"
 
-  # ---- 优先整包快照：1 次请求代替 (主脚本 + N 个附加文件) 次 ----
-  local src_root="" used_tarball=0 ef ef_src ef_rel ef_dest
-  if ensure_tarball "$ref" && [[ -n "$TARBALL_SRC" && -d "${TARBALL_SRC}/${script_dir}" ]]; then
-    src_root="$TARBALL_SRC"
-    log_info "下载 ${name} (ref: ${ref}): 整包快照"
-    # 拷到 .new 并在【替换之前】补齐共享文件：任何一步失败都不动现有安装
-    # （旧实现先 rm -rf 旧树再 mv，共享文件失败时既无回滚又留下坏安装）
-    if cp -a "${src_root}/${script_dir}" "$dest_new" 2>/dev/null; then
-      # 跨目录共享文件（如 lib/core.sh:lib/core.sh）：整包拷贝只覆盖了工具目录，
-      # 源在工具目录之外的文件必须单独拷进来，否则装完 source 缺文件 → 启动即崩
-      local _ef _src _dst _ok=1
-      for _ef in $extra_files; do
-        IFS=$'\t' read -r _src _dst < <(ef_src_dst "$_ef" "$script_dir")
-        [[ "$_src" == "$script_dir"/* ]] && continue
-        mkdir -p "$(dirname "${dest_new}/${_dst}")"
-        cp -a "${src_root}/${_src}" "${dest_new}/${_dst}" 2>/dev/null && continue
-        # 该 ref 的工具是否真的依赖共享核心：旧 tag（v1.15.0 及更早）根本没有
-        # lib/core.sh，其 common.sh 也不 source core —— 缺这个文件是正常状态，
-        # 报错会让「按版本安装/回滚」对旧 tag 全部失效。
-        if grep -q 'core\.sh' "${dest_new}/lib/common.sh" 2>/dev/null; then
-          log_err "整包缺共享文件: ${_src}（该 ref 的工具依赖共享核心，安装不完整；现有安装未改动）"
-          _ok=0
-          break
-        fi
-        log_warn "跳过共享文件 ${_src}：该 ref（${ref}）的工具尚未使用共享核心"
-      done
-      if [[ $_ok -eq 0 ]]; then
-        rm -rf "$dest_new"
-        return 1
-      fi
-      # 原子替换：旧树先备份，替换成功才删备份；替换失败恢复旧树
-      if [[ -d "$dest" ]]; then
-        mv "$dest" "$dest_bak"
-      fi
-      if mv "$dest_new" "$dest" 2>/dev/null; then
-        rm -rf "$dest_bak"
-      else
-        rm -rf "$dest"
-        if [[ -d "$dest_bak" ]]; then
-          mv "$dest_bak" "$dest"
-        fi
-        log_err "替换安装目录失败，已恢复原安装: ${dest}"
-        return 1
-      fi
-      used_tarball=1
-      chmod +x "${dest}/$(basename "$script")" 2>/dev/null || true
-      find "$dest" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-      log_info "已安装脚本: ${dest}/$(basename "$script")（共 $(find "$dest" -type f | wc -l) 个文件）"
-    else
-      rm -rf "$dest_new" 2>/dev/null || true
-      log_warn "整包拷贝失败，回退逐文件下载"
-    fi
+  # ---- 整包快照：v1.20.0 起是**唯一**安装路径（逐文件回退已移除）----
+  local src_root="" ef _src _dst _ok=1
+  if ! ensure_tarball || [[ -z "$TARBALL_SRC" || ! -d "${TARBALL_SRC}/${script_dir}" ]]; then
+    log_err "整包下载/解包失败（codeload 不可达 / 无 tar / 仓库结构异常）—— 现有安装未改动: ${dest}"
+    log_err "  v1.20.0 起已移除逐文件回退。逃生办法：手动下载并解包仓库，然后"
+    log_err "  VPS_TOOLS_TARBALL_ROOT=<解包后的仓库根> ${0##*/} install ${name}"
+    return 1
   fi
-
-  # ---- 回退路径：逐文件下载（codeload 不可达 / 无 tar / 整包异常时）----
-  if [[ $used_tarball -eq 0 ]]; then
-    # 同样先装到 .new，全部成功才替换：中途失败不得破坏现有安装
+  src_root="$TARBALL_SRC"
+  log_info "下载 ${name}: 整包快照"
+  # 拷到 .new 并在【替换之前】补齐共享文件：任何一步失败都不动现有安装
+  # （旧实现先 rm -rf 旧树再 mv，共享文件失败时既无回滚又留下坏安装）
+  if ! cp -a "${src_root}/${script_dir}" "$dest_new" 2>/dev/null; then
+    rm -rf "$dest_new" 2>/dev/null || true
+    log_err "整包拷贝失败（${src_root}/${script_dir}）—— 现有安装未改动: ${dest}"
+    return 1
+  fi
+  # 跨目录共享文件（如 lib/core.sh:lib/core.sh）：整包拷贝只覆盖工具目录，
+  # 源在工具目录之外的文件必须单独拷进来，否则装完 source 缺文件 → 启动即崩
+  for ef in $extra_files; do
+    IFS=$'\t' read -r _src _dst < <(ef_src_dst "$ef" "$script_dir")
+    [[ "$_src" == "$script_dir"/* ]] && continue
+    mkdir -p "$(dirname "${dest_new}/${_dst}")"
+    if ! cp -a "${src_root}/${_src}" "${dest_new}/${_dst}" 2>/dev/null; then
+      log_err "整包缺共享文件: ${_src}（安装不完整；现有安装未改动）"
+      _ok=0; break
+    fi
+  done
+  if [[ $_ok -eq 0 ]]; then
     rm -rf "$dest_new"
-    mkdir -p "$dest_new"
-    log_info "下载 ${name} (ref: ${ref}): ${base}/${script}"
-    if ! curl -fsSL --max-time 60 "${base}/${script}" -o "${dest_new}/$(basename "$script")"; then
-      log_err "下载失败: ${script}（ref: ${ref}；检查网络、仓库路径或该 ref 是否含此文件；现有安装未改动）"
-      rm -rf "$dest_new"
-      return 1
-    fi
-    chmod +x "${dest_new}/$(basename "$script")"
-    log_info "已安装脚本: ${dest}/$(basename "$script")"
-
-    # 附加文件（多文件工具：lib/*.sh、templates/*.tpl 等，主脚本 source 依赖它们）
-    # 条目可为 `源路径:目标相对路径`（共享文件），见 ef_src_dst
-    for ef in $extra_files; do
-      IFS=$'\t' read -r ef_src ef_rel < <(ef_src_dst "$ef" "$script_dir")
-      ef_dest="${dest_new}/${ef_rel}"
-      mkdir -p "$(dirname "$ef_dest")"  # lib/、templates/ 子目录可能不存在（防 curl 23）
-      if ! curl -fsSL --max-time 60 "${base}/${ef_src}" -o "$ef_dest"; then
-        # 共享文件在旧 tag 上不存在是正常状态（该 ref 的工具还没用共享核心）
-        if [[ "$ef" == *:* ]] && ! grep -q 'core\.sh' "${dest_new}/lib/common.sh" 2>/dev/null; then
-          log_warn "跳过共享文件 ${ef_src}：该 ref（${ref}）的工具尚未使用共享核心"
-          continue
-        fi
-        log_err "下载失败: ${ef_src}（附加文件，ref: ${ref}，安装不完整；现有安装未改动）"
-        rm -rf "$dest_new"
-        return 1
-      fi
-      case "$ef_rel" in
-        *.sh) chmod +x "$ef_dest" ;;
-      esac
-      log_info "已安装附加文件: ${dest}/${ef_rel}"
-    done
-
-    # 原子替换（同整包路径）
-    if [[ -d "$dest" ]]; then
-      mv "$dest" "$dest_bak"
-    fi
-    if mv "$dest_new" "$dest" 2>/dev/null; then
-      rm -rf "$dest_bak"
-    else
-      rm -rf "$dest"
-      if [[ -d "$dest_bak" ]]; then
-        mv "$dest_bak" "$dest"
-      fi
-      log_err "替换安装目录失败，已恢复原安装: ${dest}"
-      return 1
-    fi
+    return 1
   fi
-
-  # 记录本次安装的 ref：后续 update 不指定 --ref 时沿用（= 版本固定/回滚语义）
-  record_tool_ref "$name" "$ref"
+  # 原子替换：旧树先备份，替换成功才删备份；替换失败恢复旧树
+  if [[ -d "$dest" ]]; then
+    mv "$dest" "$dest_bak"
+  fi
+  if mv "$dest_new" "$dest" 2>/dev/null; then
+    rm -rf "$dest_bak"
+  else
+    rm -rf "$dest"
+    if [[ -d "$dest_bak" ]]; then
+      mv "$dest_bak" "$dest"
+    fi
+    log_err "替换安装目录失败，已恢复原安装: ${dest}"
+    return 1
+  fi
+  chmod +x "${dest}/$(basename "$script")" 2>/dev/null || true
+  find "$dest" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+  log_info "已安装脚本: ${dest}/$(basename "$script")（共 $(find "$dest" -type f | wc -l) 个文件）"
 
   # 命令入口（工具名直接调用）：wrapper → 脚本库
   mkdir -p "${CMD_DIR}"   # 命令目录可能不存在（干净系统 /usr/local/bin 也需确保）
@@ -454,15 +339,11 @@ EOF
     else
       env_was_created=1
       mkdir -p "$(dirname "$env_tgt")"
-      if [[ $used_tarball -eq 1 && -f "${src_root}/${env_tpl}" ]] \
-         && cp "${src_root}/${env_tpl}" "$env_tgt" 2>/dev/null; then
-        chmod 600 "$env_tgt"
-        log_info "已生成配置模板: ${env_tgt} —— 请编辑填入真实密钥!"
-      elif curl -fsSL --max-time 60 "${base}/${env_tpl}" -o "$env_tgt"; then
+      if [[ -f "${src_root}/${env_tpl}" ]] && cp "${src_root}/${env_tpl}" "$env_tgt" 2>/dev/null; then
         chmod 600 "$env_tgt"
         log_info "已生成配置模板: ${env_tgt} —— 请编辑填入真实密钥!"
       else
-        log_warn "配置模板下载失败: ${env_tpl}"
+        log_warn "配置模板缺失: ${env_tpl}（整包内不存在，配置需手工创建: ${env_tgt}）"
       fi
     fi
   fi
@@ -484,7 +365,7 @@ EOF
     log_info "${name} 配置已存在（更新），保留原配置。如需重新配置: sudo ${next_cmd}"
   fi
 
-  log_info "${name} 安装完成（ref: ${ref}）。"
+  log_info "${name} 安装完成。"
 }
 
 uninstall_tool() {  # $1=tool line
@@ -548,11 +429,9 @@ installed_self_version() {  # $1=文件（默认 ${VPS_TOOLS_CMD}）
   sed -n 's/^VPS_TOOLS_VERSION="\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -1
 }
 
-# 远端 install.sh 的版本号（读不到则空 = 离线/被墙）
-# ref 取 installer_ref()：被 pin 到 tag 的机器只跟该 tag 比对，不会被「最新版」打扰
+# 远端 install.sh 的版本号（读不到则空 = 离线/被墙）。坐标恒为 main（v1.20.0）
 remote_version() {
-  local base; base="$(base_url_for "$(installer_ref)")"
-  curl -fsSL --max-time 10 "${base}/install.sh" 2>/dev/null \
+  curl -fsSL --max-time 10 "${BASE_URL}/install.sh" 2>/dev/null \
     | grep -m1 '^VPS_TOOLS_VERSION=' | cut -d= -f2 | tr -d '"' | tr -d ' '
 }
 
@@ -565,10 +444,9 @@ tools_fp_of() {  # $1=文件
 
 # 下载远端 install.sh 到临时文件（成功则输出路径）
 fetch_remote_install() {
-  local t base
-  base="$(base_url_for "$(installer_ref)")"
+  local t
   t="$(mktemp "${TMPDIR:-/tmp}/vps-tools-remote.XXXXXX")" || return 1
-  if curl -fsSL --max-time 30 "${base}/install.sh" -o "$t" 2>/dev/null && [[ -s "$t" ]]; then
+  if curl -fsSL --max-time 30 "${BASE_URL}/install.sh" -o "$t" 2>/dev/null && [[ -s "$t" ]]; then
     printf '%s\n' "$t"
   else
     rm -f "$t"; return 1
@@ -631,9 +509,9 @@ reexec_after_self_update() {
   log_info "管理命令已更新，重新载入新版本后继续（函数体与工具清单同源）"
   export VPS_TOOLS_REEXEC=1
   export VPS_TOOLS_SKIP_SELF_UPDATE=1
-  # 整包缓存也带过去：新进程能命中 .ok 缓存，不必为同一 ref 再拉一次 tarball
+  # 整包缓存也带过去：新进程能命中 .ok 缓存，不必再拉一次 tarball
   if [[ -n "${TARBALL_ROOT:-}" ]]; then
-    export VPS_TOOLS_TARBALL_ROOT="$TARBALL_ROOT"
+    export VPS_TOOLS_TARBALL_CACHE="$TARBALL_ROOT"
   fi
   exec "${VPS_TOOLS_CMD}" "${ORIG_ARGS[@]}"
 }
@@ -653,13 +531,6 @@ install_self() {
   fi
   [[ $EUID -eq 0 ]] || return 1
   local cur remote running cur_fp remote_fp
-  local ref base explicit=0
-  ref="$(installer_ref)"
-  base="$(base_url_for "$ref")"
-  # 用户显式指定 ref（--ref 仅 self-update 生效 / VPS_TOOLS_REF 全局）→ 允许降级（回滚语义）
-  if [[ -n "$ENV_REF" || ( "$ACTION" == "self-update" && -n "$CLI_REF" ) ]]; then
-    explicit=1
-  fi
   cur="$(installed_self_version)"
   running="$(self_running_version)"
   remote="$(remote_version)"
@@ -685,28 +556,25 @@ install_self() {
     [[ -n "$rf" ]] && rm -f "$rf"
     if [[ -z "$remote_fp" || -z "$cur_fp" || "$remote_fp" == "$cur_fp" ]]; then
       log_info "管理命令已是最新（v${cur}）: ${VPS_TOOLS_CMD}"
-      record_installer_ref "$ref"
       return 0
     fi
     log_warn "版本同为 v${cur}，但远端工具清单已变更（${cur_fp} → ${remote_fp}）——继续更新"
   fi
 
   # 本机正在运行的 install.sh 比远端还新 → 不用远端覆盖自己（防降级）
-  # 例外：用户显式 --ref 指定版本时允许降级（回滚到旧版本是合法诉求）
-  if [[ $explicit -eq 0 ]] && ver_gt "$running" "$remote"; then
+  # v1.20.0 起没有「按版本回滚」通道，这条只剩「本地开发版别被 main 覆盖」的意义
+  if ver_gt "$running" "$remote"; then
     log_warn "本机版本 v${running} 高于远端 v${remote}，不覆盖（跳过）"
-    log_warn "  如需回滚到指定版本: sudo vps-tools self-update --ref <tag>"
     return 0
   fi
 
   mkdir -p "$(dirname "${VPS_TOOLS_CMD}")"   # curl 写文件前先建目录（防 curl 23）
   local tmp="${VPS_TOOLS_CMD}.tmp.$$"
   # 优先复用整包快照（本次运行已拉过则 0 次请求；未拉过则 1 次请求拿整包）
-  local got_ok=0
-  if ensure_tarball "$ref" && [[ -n "$TARBALL_SRC" && -f "${TARBALL_SRC}/install.sh" ]]; then
-    cp "${TARBALL_SRC}/install.sh" "$tmp" 2>/dev/null && got_ok=1
-  fi
-  if [[ $got_ok -eq 0 ]] && ! curl -fsSL --max-time 60 "${base}/install.sh" -o "$tmp"; then
+  # 安装器自身**始终**从 BASE_URL 拉：不复用整包快照 —— 快照可能来自
+  # VPS_TOOLS_TARBALL_ROOT 手动注入（本地开发树），用它自更新会把注入的旧副本
+  # 当成远端最新，self-update 永远「已是最新」。
+  if ! curl -fsSL --max-time 60 "${BASE_URL}/install.sh" -o "$tmp"; then
     rm -f "$tmp"
     log_warn "下载失败，管理命令保持原样: ${VPS_TOOLS_CMD}"
     return 1
@@ -721,7 +589,6 @@ install_self() {
   fi
   chmod +x "$tmp"
   mv -f "$tmp" "${VPS_TOOLS_CMD}"
-  record_installer_ref "$ref"
   # 立刻重载 TOOLS 清单：本进程后续的 install_tool 必须用新清单，
   # 否则本轮新增的 lib 文件会被漏装（2026-09-19 事故）
   reload_tools_registry || log_warn "重载工具清单失败，本次安装可能漏装新增文件"
@@ -791,10 +658,7 @@ interactive_menu() {
   check_update || true
   while true; do
     echo
-    local iref pin=""
-    iref="$(installer_ref)"
-    [[ "$iref" != "$DEFAULT_REF" ]] && pin="，ref: ${iref}"
-    echo "===== vps-tools 管理（v${VPS_TOOLS_VERSION}${pin}）====="
+    echo "===== vps-tools 管理（v${VPS_TOOLS_VERSION}）====="
     echo "  1) 安装工具（选择）"
     echo "  2) 更新工具（选择）"
     echo "  3) 卸载工具（选择）"
@@ -823,27 +687,24 @@ interactive_menu() {
 main() {
   # 原始参数：自更新后 re-exec 要原样重放（见 reexec_after_self_update）
   ORIG_ARGS=("$@")
-  # 参数解析：支持 --ref <tag> / --ref=<tag>（可出现在任意位置，其余按位置参数）
   local -a pos=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --ref)   CLI_REF="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
-      --ref=*) CLI_REF="${1#*=}"; shift ;;
+      # v1.20.0 移除：显式拒绝而不是当未知参数静默忽略 —— 老脚本/老习惯带 --ref 时
+      # 必须立刻看到「这个能力没了」，否则会以为成功钉到了某个版本
+      --ref|--ref=*)
+        log_err "--ref 已于 v1.20.0 移除：安装器与所有工具始终跟 main（不再支持按版本安装/回滚）。"
+        log_err "  如需装历史版本：git checkout <tag> 后手工运行 install.sh"
+        return 1
+        ;;
       *)       pos+=("$1"); shift ;;
     esac
   done
   local action="${pos[0]:-menu}"
   local tool="${pos[1]:-}"
-  ACTION="$action"
-
-  # ref 校验：防止拼出意外 URL（空格/引号/路径穿越）
-  if [[ -n "$CLI_REF" ]] && ! ref_valid "$CLI_REF"; then
-    log_err "非法 ref: ${CLI_REF}（只允许字母数字与 . _ / -，如 v1.14.0、vps-backup-v1.4.0、main）"
-    return 1
-  fi
-  if [[ -n "$ENV_REF" ]] && ! ref_valid "$ENV_REF"; then
-    log_err "非法 VPS_TOOLS_REF: ${ENV_REF}"
-    return 1
+  # v1.20.0 起 VPS_TOOLS_REF 无效：明确告警而不是静默忽略（否则用户以为钉住了版本）
+  if [[ -n "${VPS_TOOLS_REF:-}" ]]; then
+    log_warn "VPS_TOOLS_REF=${VPS_TOOLS_REF} 已于 v1.20.0 失效（安装器与工具始终跟 main），已忽略"
   fi
 
   case "$action" in
@@ -862,19 +723,15 @@ vps-tools ${VPS_TOOLS_VERSION} — vps-tools 管理工具
   vps-tools install [工具]     安装工具（无参 = 交互式选择）
   vps-tools update  [工具]     更新工具
   vps-tools uninstall [工具]   卸载工具
-  vps-tools list               查看已安装/可用的工具（含已装版本与 ref）
+  vps-tools list               查看已安装/可用的工具（含已装版本）
   vps-tools self-update        更新 vps-tools 自身
   vps-tools -v, --version      显示版本号
   vps-tools -h, --help         显示本帮助
 
-版本坐标（ref = 分支名或 tag 名）:
-  --ref <tag>                  本次操作从该 ref 取文件（工具操作只影响该工具）
-  self-update --ref <tag>      把安装器自身切到指定版本（回滚）
-  环境变量 VPS_TOOLS_REF=<tag> 全局覆盖（工具与安装器都从该 ref 取）
-  示例:
-    vps-tools install vps-backup --ref vps-backup-v1.4.0   # 装/回滚到 1.4.0
-    vps-tools update vps-backup --ref main                 # 回到最新
-    vps-tools self-update --ref v1.13.0                    # 安装器回滚
+版本策略（v1.20.0 起）:
+  安装器与所有工具**始终跟 main**，整包快照是唯一安装路径。
+  --ref / VPS_TOOLS_REF / 逐文件回退下载已移除；tag 只作发布里程碑。
+  整包下载失败时的逃生: VPS_TOOLS_TARBALL_ROOT=<已解包的仓库根> sudo -E bash install.sh install <tool>
 
 可用工具: ${TOOLS[*]//|*|*|*|*/}
 EOF
@@ -882,12 +739,10 @@ EOF
     install|update)
       # root 检测：非 root 明确提示（管道方式无法自动 sudo 重执行，统一引导）
       if [[ $EUID -ne 0 ]]; then
-        local hint_ref="$DEFAULT_REF"
-        [[ -n "$tool" ]] && hint_ref="$(tool_ref "$tool")"
         log_err "需要 root 权限（安装目标 ${INSTALL_DIR} 和 ${CONFIG_DIR} 需 root 写入）。"
         log_err "推荐管道方式（自动以 root 运行）："
-        echo "    curl -sSL $(base_url_for "$hint_ref")/install.sh | sudo bash -s -- ${action}${tool:+ ${tool}}${CLI_REF:+ --ref ${CLI_REF}}"
-        log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}${CLI_REF:+ --ref ${CLI_REF}}"
+        echo "    curl -sSL ${BASE_URL}/install.sh | sudo bash -s -- ${action}${tool:+ ${tool}}"
+        log_err "或本地执行：sudo bash install.sh ${action}${tool:+ ${tool}}"
         exit 1
       fi
       install_self || true   # 管理命令与工具一起保持最新
