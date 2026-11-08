@@ -14,6 +14,9 @@
 #       （mock ip 断言调用面 + 真内核 netns 实测，无权限时 SKIP）
 #   [I] warp test 的临时配置必须以 .json 结尾（26.10.21 起 -format=json 已被忽略）：
 #       mock 断言 -config 指向 .json 且不再传该 flag + 真 xray 在 netns 里跑通自检
+#   [J] endpoint 收敛成 IPv4（1.19.0+）：无公网 IPv6 时域名 endpoint 必须解析成 IPv4 字面量
+#       —— Xray 的 MakeResolveLocal 在 A/AAAA 里 dice.Roll **随机挑一个**，无 v6 的机器上
+#       约一半握手发不出去；setup 写死 IPv4，老 state 在 gen 时自愈
 #
 # 用法: bash tests/verify-xray-deploy-warp.sh
 # 退出码: 0=全部通过
@@ -36,6 +39,30 @@ echo
 # ---------- 生成器探针（source 主脚本但截断分发段，避免真的执行命令） ----------
 MOCKBIN="$TMP/bin"; mkdir -p "$MOCKBIN"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$MOCKBIN/xray"; chmod +x "$MOCKBIN/xray"
+
+# 解析器打桩（[J] 用）：本机无公网 IPv6 的分支会解析 endpoint 域名，真解析在 CI 里
+# 既依赖外网又会随 CF 的 A 记录漂移 → 默认返回 203.0.113.9。
+# $TMP/mock-a 存在且非空 → 返回其内容；存在但为空 → 模拟解析失败。
+# host / dig 一律 exit 1：逼解析走 getent 桩，失败用例才不会被真 DNS 兜回来。
+REAL_GETENT="$(command -v getent || true)"
+RESOLVEBIN="$TMP/resolvebin"; mkdir -p "$RESOLVEBIN"
+cat > "$RESOLVEBIN/getent" <<EOS
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "ahostsv4" ]]; then
+  if [[ -f "${TMP}/mock-a" ]]; then
+    [[ -s "${TMP}/mock-a" ]] || exit 1
+    printf '%s   STREAM %s\n' "\$(cat "${TMP}/mock-a")" "\${2:-}"
+    exit 0
+  fi
+  printf '203.0.113.9   STREAM %s\n203.0.113.9   DGRAM\n' "\${2:-}"
+  exit 0
+fi
+exec "${REAL_GETENT:-/bin/false}" "\$@"
+EOS
+printf '#!/usr/bin/env bash\nexit 1\n' > "$RESOLVEBIN/host"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$RESOLVEBIN/dig"
+chmod +x "$RESOLVEBIN/getent" "$RESOLVEBIN/host" "$RESOLVEBIN/dig"
+export PATH="$RESOLVEBIN:$PATH"
 
 GEN="$TMP/gen.sh"
 cat > "$GEN" <<'GENPROBE'
@@ -442,6 +469,81 @@ if [[ -n "$XRAY_BIN" && -x "$XRAY_BIN" ]] && [[ "$(id -u)" -eq 0 ]] && command -
 else
   echo "  [SKIP] 无真 xray / 非 root / 无 unshare，跳过真二进制 warp test"; SKIP=$((SKIP+1))
 fi
+echo
+
+# ---------- J. endpoint 收敛成 IPv4（本机无公网 IPv6） ----------
+# 根因：Xray 的 MakeResolveLocal 在 A+AAAA 里 dice.Roll 随机挑一个 → 无 v6 的机器上
+# 约一半握手发往 AAAA，必然发不出去。所以 ipv6=false 时 endpoint 必须是 IPv4 字面量。
+echo "[J] endpoint：无公网 IPv6 时必须收敛成 IPv4 字面量"
+epout() { bash "$GEN" "$MAIN" "$TMP/none.json" "$TMP/none.cfg" "$MOCKBIN/xray" warp_endpoint_prefer_ipv4 "$1" 2>/dev/null; }
+eprc()  { bash "$GEN" "$MAIN" "$TMP/none.json" "$TMP/none.cfg" "$MOCKBIN/xray" warp_endpoint_prefer_ipv4 "$1" >/dev/null 2>&1; echo $?; }
+
+ck "域名 → IPv4:port（保留端口）"         "$(epout engage.cloudflareclient.com:2408)" "203.0.113.9:2408"
+ck "已是 IPv4 → 原样返回"                 "$(epout 162.159.192.1:2408)" "162.159.192.1:2408"
+ck "IPv6 字面量 → 返回 2（不做内嵌反解）"  "$(eprc '[2606:4700:d0::a29f:c001]:2408')" "2"
+ck "格式非法 → 返回 1"                    "$(eprc 'no-port-here')" "1"
+: > "$TMP/mock-a"
+ck "解析失败 → 返回 1"                    "$(eprc engage.cloudflareclient.com:2408)" "1"
+printf '198.51.100.7\n' > "$TMP/mock-a"
+ck "解析结果跟随 DNS（198.51.100.7）"     "$(epout engage.cloudflareclient.com:2408)" "198.51.100.7:2408"
+rm -f "$TMP/mock-a"
+
+# setup：无公网 v6 → endpoint 写死 IPv4，原域名留档 .warp.endpoint_host
+mk_state on off
+cp "$STATE" "$TMP/j-none.json"
+WARP_IF_INET6_FILE="$IF6_NONE" bash "$GEN" "$MAIN" "$TMP/j-none.json" "$TMP/j.cfg" "$MOCKBIN/xray" \
+  warp_setup "$PROFILE" >/dev/null 2>&1
+ck "setup(无 v6)：.warp.endpoint = IPv4"  "$(jq -r '.warp.endpoint' "$TMP/j-none.json")" "203.0.113.9:2408"
+ck "setup(无 v6)：记下原域名"             "$(jq -r '.warp.endpoint_host' "$TMP/j-none.json")" "engage.cloudflareclient.com"
+ck "setup(无 v6)：show 标出原域名" \
+  "$(bash "$GEN" "$MAIN" "$TMP/j-none.json" "$TMP/j.cfg" "$MOCKBIN/xray" warp_show 2>&1 | grep -c '原域名 engage.cloudflareclient.com' || true)" "1"
+
+# setup：有公网 v6 → endpoint 保持域名（v6 机器上 A/AAAA 都能用，不做改写）
+mk_state on off; cp "$STATE" "$TMP/j-pub.json"
+WARP_IF_INET6_FILE="$IF6_PUB" bash "$GEN" "$MAIN" "$TMP/j-pub.json" "$TMP/j.cfg" "$MOCKBIN/xray" \
+  warp_setup "$PROFILE" >/dev/null 2>&1
+ck "setup(有 v6)：endpoint 保持域名"      "$(jq -r '.warp.endpoint' "$TMP/j-pub.json")" "engage.cloudflareclient.com:2408"
+ck "setup(有 v6)：不写 endpoint_host"     "$(jq -r '.warp.endpoint_host // "absent"' "$TMP/j-pub.json")" "absent"
+
+# setup：endpoint 是 IPv6 字面量 + 本机无 v6 → 必须报错（不静默部署一个连不通的出站）
+sed 's|^Endpoint = .*|Endpoint = [2606:4700:d0::a29f:c001]:2408|' "$PROFILE" > "$TMP/ep6.conf"
+mk_state on off; cp "$STATE" "$TMP/j-ep6.json"
+jq -c '.warp' "$TMP/j-ep6.json" > "$TMP/j-ep6.before"
+rc=0
+WARP_IF_INET6_FILE="$IF6_NONE" bash "$GEN" "$MAIN" "$TMP/j-ep6.json" "$TMP/j.cfg" "$MOCKBIN/xray" \
+  warp_setup "$TMP/ep6.conf" >/dev/null 2>&1 || rc=$?
+ck "endpoint 是 IPv6 字面量 + 无 v6 → 报错退出" "$rc" "1"
+ck "… 且 state 未改动"                    "$(jq -c '.warp' "$TMP/j-ep6.json")" "$(cat "$TMP/j-ep6.before")"
+
+# setup：解析不出 IPv4 → 报错退出（人在现场，重跑即可；不许写一个坏出站）
+: > "$TMP/mock-a"
+mk_state on off; cp "$STATE" "$TMP/j-fail.json"
+jq -c '.warp' "$TMP/j-fail.json" > "$TMP/j-fail.before"
+rc=0
+WARP_IF_INET6_FILE="$IF6_NONE" bash "$GEN" "$MAIN" "$TMP/j-fail.json" "$TMP/j.cfg" "$MOCKBIN/xray" \
+  warp_setup "$PROFILE" >/dev/null 2>&1 || rc=$?
+ck "解析失败 → setup 报错退出"            "$rc" "1"
+ck "… 且 state 未改动"                    "$(jq -c '.warp' "$TMP/j-fail.json")" "$(cat "$TMP/j-fail.before")"
+rm -f "$TMP/mock-a"
+
+# gen 兜底：本改动前导入的老 state 仍是域名 + 无 v6 → rebuild 时自愈
+mk_state on off '{"ipv6":false}'
+jq 'del(.warp.endpoint_host)' "$STATE" > "$TMP/j-old.json" && mv "$TMP/j-old.json" "$STATE"
+gen6 "$IF6_NONE"
+ck "老 state（域名 + 无 v6）→ gen 自愈成 IPv4" "$(w6 '.settings.peers[0].endpoint')" "203.0.113.9:2408"
+ck "… 且 endpoint_host 不泄漏进出站"      "$(jq '.outbounds[] | select(.tag=="warp") | .settings.peers[0] | has("endpoint_host")' "$CFG")" "false"
+
+mk_state on off '{"ipv6":true}'; gen6 "$IF6_NONE"
+ck "ipv6=true → endpoint 保持域名"        "$(w6 '.settings.peers[0].endpoint')" "engage.cloudflareclient.com:2408"
+
+# 解析失败时 gen 只告警，不打断 rebuild（DNS 抖动不能把线上代理弄挂）
+mk_state on off '{"ipv6":false}'
+: > "$TMP/mock-a"
+out="$(bash "$GEN" "$MAIN" "$STATE" "$CFG" "$MOCKBIN/xray" build_config 2>&1)"; rc=$?
+ck "解析失败 → rebuild 仍成功"            "$rc" "0"
+ck "解析失败 → 保留域名（不静默丢配置）"  "$(w6 '.settings.peers[0].endpoint')" "engage.cloudflareclient.com:2408"
+ck "解析失败 → 有告警"                    "$(grep -c '无法收敛成 IPv4' <<<"$out" || true)" "1"
+rm -f "$TMP/mock-a"
 echo
 
 echo "----------------------------------------------"

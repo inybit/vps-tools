@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-VERSION="1.18.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
+VERSION="1.19.0"   # 发布新功能时递增（配合 vps-tools 工具约定：新增工具必须支持 -v/-h）
 
 # ============ 路径常量 ============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,6 +65,7 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 . "${LIB_DIR}/warp.sh"
 . "${LIB_DIR}/warp-tun.sh"
 . "${LIB_DIR}/warp-cmd.sh"
+. "${LIB_DIR}/warp-endpoint.sh"
 . "${LIB_DIR}/menu.sh"
 . "${LIB_DIR}/routing.sh"
 . "${LIB_DIR}/chain.sh"

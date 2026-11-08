@@ -9,6 +9,7 @@
 #   settings: secretKey / address[] / peers[].{endpoint,publicKey,allowedIPs} /
 #             mtu / remoteDNS[] / reserved[3] / noKernelTun
 #   · 隧道内目标**必须是 IP** → 域名由 remoteDNS 在隧道内解析（即 profile 的 DNS 行）
+#   · endpoint 的域名在**无公网 IPv6** 的机器上必须收敛成 IPv4 字面量（见 lib/warp-endpoint.sh）
 #   · noKernelTun **恒写出**，缺省 = true = gVisor 用户态（1.18.0 起，用户 2026-11-05 决定）。
 #     内核 TUN 要 CAP_NET_ADMIN + 可用 /dev/net/tun；Xray 的自动检测在部分 LXC 上会误判
 #     （有权限却用不了 TUN → 出站静默失败）。gVisor 纯用户态，无此依赖。
@@ -140,13 +141,23 @@ warp_enabled() {
 # 从 state.json 的 .warp 生成 wireguard 出站（未启用则输出空）
 gen_warp_outbound() {
   warp_enabled || return 0
-  local w s
+  local w s ep ep4 rc=0
   w="$(jq -c '.warp' "$STATE_FILE" 2>/dev/null || true)"
   [[ -n "$w" && "$w" != "null" ]] || return 0
   # 本机无公网 IPv6 → 出站不配置 v6（老 state 无 .warp.ipv6 时按本机实时探测）
   if ! warp_ipv6_enabled; then
     if s="$(warp_strip_ipv6 "$w")" && [[ "$(jq -r '.address | length' <<<"$s")" -gt 0 ]]; then
       w="$s"
+    fi
+    # endpoint 同理：无公网 IPv6 时必须是 IPv4 字面量（域名会在 A/AAAA 里随机挑，见
+    # lib/warp-endpoint.sh）。本改动前导入的老 state 仍存域名 → 这里实时解析自愈；
+    # 解析失败**只告警不打断**：rebuild 卡在 DNS 上会把线上代理一起弄挂。
+    ep="$(jq -r '.endpoint' <<<"$w")"
+    ep4="$(warp_endpoint_prefer_ipv4 "$ep")" || rc=$?
+    if [[ $rc -eq 0 ]]; then
+      [[ "$ep4" == "$ep" ]] || w="$(jq -c --arg ep "$ep4" '.endpoint = $ep' <<<"$w")"
+    else
+      log_warn "WARP endpoint 无法收敛成 IPv4（${ep}）—— 本机无公网 IPv6 时握手会在 AAAA 上随机失败；重跑: xray-deploy warp setup <profile>"
     fi
   fi
   gen_outbound_wireguard "$WARP_OUTBOUND_TAG" "$w"

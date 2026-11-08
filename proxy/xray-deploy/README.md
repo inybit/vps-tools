@@ -255,7 +255,7 @@ profile → 出站字段映射：
 | `MTU` | `mtu` | 缺省 1280，限 576–1500 |
 | `PublicKey` | `peers[0].publicKey` | |
 | `AllowedIPs` | `peers[0].allowedIPs` | |
-| `Endpoint` | `peers[0].endpoint` | |
+| `Endpoint` | `peers[0].endpoint` | 本机无公网 IPv6 时解析成 IPv4 字面量（见下） |
 
 - **默认 gVisor 用户态（1.18.0+）**：出站恒带 `noKernelTun: true` —— 纯进程内网络栈，
   不需要 `CAP_NET_ADMIN` / `/dev/net/tun`，也不占内核 IPv6 策略路由表 10230。
@@ -274,6 +274,16 @@ profile → 出站字段映射：
   原因：无 v6 的机器上内核 TUN 加 v6 地址/路由会失败，整个 wireguard 出站起不来。
   逃生门 `--ipv6 on`（强制保留，本机无 v6 时告警）/ `--ipv6 off`（强制剔除）；默认 `auto`。
   旧 state 无 `.warp.ipv6` 字段时按本机实时探测（自愈），`warp show` 会标「自动（老配置）」。
+- **endpoint 收敛成 IPv4（1.19.0+）**：`warp setup` 判定本机无公网 IPv6 时（同上一条），会把
+  `Endpoint` 的域名解析成 A 记录、写成 IPv4 字面量（原域名记进 `.warp.endpoint_host`，`warp show`
+  仍能看到）。原因：Xray 的 `MakeResolveLocal` 把 `endpoint` 域名用 `LookupIP`（v4+v6 同时开）
+  解析后 `dice.Roll` **随机挑一个**地址 → 没有 v6 的机器上约一半握手发往 AAAA，必然发不出去
+  （症状是「有时通有时不通」，极易误判成 CF 抽风）。写死 IPv4 后 `net.ParseIP` 直接命中，
+  不解析、不随机。细节与源码引用见 `lib/warp-endpoint.sh` 头注释。
+  - 本改动前导入的 state 仍存域名 → rebuild 时实时解析自愈（解析失败只告警，不打断 rebuild）；
+  - `Endpoint` 本身是 IPv6 字面量（`[2606:4700:d0::a29f:c001]:2408`）而本机无 v6 → `warp setup`
+    直接报错，按提示改成 `engage.cloudflareclient.com:2408` 或 `162.159.192.1:2408` 后重导；
+  - 本机有公网 IPv6 时 endpoint 保持域名不变（v4/v6 都通）。
 - **换 key 后必须清旧 key 的 v6 残留（1.16.0+ 自动做；默认 gVisor 不建 TUN，本段只对 `--kernel-tun` 的机器相关）**：Xray 内核 TUN 会在 IPv6 策略路由里
   加 `from <隧道 v6> lookup 10230` / `oif wg0 lookup 10230` 两条 rule + `::/0` 路由。正常退出会删，
   但 **`xray run -test` 走 `os.Exit` 不执行 `Close()`** —— 而每次 rebuild 都要跑 `-test`，
@@ -398,13 +408,13 @@ sudo xray-deploy update-geo [--restart]           # 手动更新；--restart = �
 ```
 proxy/xray-deploy/
 ├── xray-deploy.sh          # 入口：菜单 + 子命令分发
-└── lib/                    # 35 模块
+└── lib/                    # 36 模块
     ├── common.sh service.sh state.sh xray-bin.sh keys.sh registry.sh
     ├── cdn-detect.sh fallback-data.sh fallback.sh sni-check.sh globalping.sh
     ├── inbound.sh outbound.sh routing.sh chain.sh chain-info.sh ss2022.sh
     ├── proto-wizard.sh xhttp3.sh proto-crud.sh proto-edit.sh
     ├── client-mihomo.sh client-singbox.sh client-ss2022.sh
-    ├── geo-update.sh geo-timer.sh warp.sh warp-tun.sh warp-cmd.sh
+    ├── geo-update.sh geo-timer.sh warp.sh warp-tun.sh warp-cmd.sh warp-endpoint.sh
     └── cmd-lifecycle.sh cmd-upgrade.sh cmd-info.sh cmd-fallback.sh usage.sh menu.sh
 ```
 

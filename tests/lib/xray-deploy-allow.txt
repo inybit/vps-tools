@@ -112,6 +112,10 @@ cf_front_reason
 cf_sni_gate
 check_reality_sni
 cmd_reality_check
+warp_is_ipv4
+warp_endpoint_host
+warp_resolve_ipv4
+warp_endpoint_prefer_ipv4
 
 # === ALLOW_CHANGED：函数体相对拆分前基线被改动（有意）的函数 ===
 --- CHANGED ---
@@ -145,3 +149,8 @@ rebuild_and_reload
 update_geo
 proto_add
 test_fallback_domain
+# 1.19.0 endpoint IPv4 收敛：warp_setup 改写 endpoint / gen_warp_outbound 兜底 / show 展示原域名
+warp_setup
+gen_warp_outbound
+warp_show
+build_outbounds_json
