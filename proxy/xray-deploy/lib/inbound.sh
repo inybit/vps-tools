@@ -136,7 +136,9 @@ build_outbounds_json() {
   ]'
   local landing warp
   landing="$(gen_landing_outbound 2>/dev/null || true)"
-  warp="$(gen_warp_outbound 2>/dev/null || true)"
+  # ⚠️ 不吞 stderr：gen_warp_outbound 在「本机无公网 IPv6 但 endpoint 仍是域名」时会
+  #    log_warn（1.19.0+）。吞掉就等于把这个「出站一半握手发不出去」的告警静音。
+  warp="$(gen_warp_outbound || true)"
   if [[ -n "$landing" ]]; then
     base="$(jq -c --argjson l "$landing" '. + [$l]' <<<"$base")"
   fi

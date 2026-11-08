@@ -62,6 +62,8 @@ warp_setup() {  # [profile路径|-] [--kernel-tun] [--no-tun] [--reserved a,b,c]
   # 无 v6 的机器上内核 TUN 加 v6 地址/路由会失败 → 整个 WARP 出站起不来。
   # 故按本机能力剔除 address / allowedIPs / remoteDNS 里的 v6 项，并把决策写进 state
   # （.warp.ipv6），保证之后 rebuild 生成的出站可复现、不随环境漂移。
+  # endpoint 同理必须收敛成 IPv4 字面量：Xray 会用 MakeResolveLocal 在 A/AAAA 里
+  # **随机挑一个**（dice.Roll），无 v6 的机器上一半握手发不出去（见 lib/warp-endpoint.sh）。
   case "$ipv6" in
     auto) if warp_local_has_public_ipv6; then ipv6="true"; else ipv6="false"; fi ;;
     on)   ipv6="true" ;;
@@ -72,11 +74,26 @@ warp_setup() {  # [profile路径|-] [--kernel-tun] [--no-tun] [--reserved a,b,c]
     log_warn "本机未检测到公网 IPv6，但按 --ipv6 on 保留 v6 配置（--kernel-tun 下内核 TUN 可能失败；默认 gVisor 无此限制）"
   fi
   if [[ "$ipv6" == "false" ]]; then
-    local stripped
+    local stripped ep ep4 ep_host rc=0
     stripped="$(warp_strip_ipv6 "$json")" || die "剔除 IPv6 条目失败，未做任何改动"
     [[ "$(jq -r '.address | length' <<<"$stripped")" -gt 0 ]] \
       || die "profile 只有 IPv6 隧道地址，本机也没有公网 IPv6 —— 无法配置（可加 --ipv6 on 强制）"
     json="$stripped"
+    ep="$(jq -r '.endpoint' <<<"$json")"
+    ep4="$(warp_endpoint_prefer_ipv4 "$ep")" || rc=$?
+    case "$rc" in
+      0)
+        if [[ "$ep4" != "$ep" ]]; then
+          ep_host="$(warp_endpoint_host "$ep")" || ep_host=""
+          json="$(jq -c --arg ep "$ep4" --arg h "$ep_host" \
+                     '.endpoint = $ep | .endpoint_host = $h' <<<"$json")" \
+            || die "写入 IPv4 endpoint 失败，未做任何改动"
+          log_info "Endpoint 域名 ${ep_host} 已解析为 IPv4: ${ep4}（本机无公网 IPv6）"
+        fi
+        ;;
+      2) die "profile 的 Endpoint 是 IPv6 字面量（${ep}），本机没有公网 IPv6 —— 请把 Endpoint 改成 engage.cloudflareclient.com:2408 或 162.159.192.1:2408 后重导" ;;
+      *) die "Endpoint 域名解析不出 IPv4（${ep}）—— 本机无公网 IPv6 时必须是 IPv4 字面量；检查本机 DNS 后重试" ;;
+    esac
   fi
   json="$(jq -c --argjson v "$ipv6" '. + {ipv6: $v}' <<<"$json")"
 
@@ -89,6 +106,7 @@ warp_setup() {  # [profile路径|-] [--kernel-tun] [--no-tun] [--reserved a,b,c]
     + "\n  MTU      : " + (.mtu | tostring)
     + "\n  DNS      : " + (if (.dns | length) == 0 then "（未指定，用 Xray 默认）" else (.dns | join(", ")) end)
     + "\n  对端     : " + .endpoint
+    + (if .endpoint_host then "（原域名 " + .endpoint_host + "；本机无公网 IPv6）" else "" end)
     + "\n  对端公钥 : …" + (.public_key[-4:])
     + "\n  允许路由 : " + (.allowed_ips | join(", "))
     + "\n  网络栈   : " + (if $tun == "false" then "内核 TUN（显式启用，吞吐更高；LXC/容器里可能建不起来）"
@@ -126,6 +144,7 @@ warp_show() {
     + "\n  MTU      : " + ($w.mtu | tostring)
     + "\n  DNS      : " + (if ($w.dns | length) == 0 then "（未指定，Xray 默认）" else ($w.dns | join(", ")) end)
     + "\n  对端     : " + $w.endpoint
+    + (if $w.endpoint_host then "（原域名 " + $w.endpoint_host + "）" else "" end)
     + "\n  对端公钥 : …" + ($w.public_key[-4:])
     + "\n  私钥     : …" + ($w.private_key[-4:])
     + "\n  允许路由 : " + ($w.allowed_ips | join(", "))
