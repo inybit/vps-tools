@@ -83,11 +83,14 @@ sudo bash install.sh install vnstat-monitor
   注册表第 5 字段就是这里提示的子命令（`vnstat-monitor` → `setup`、`xray-deploy` → `install`、
   `vps-bench` → `nodequality`；`docker-install` / `nginx-install` / `vps-backup` / `vps-init`
   留空 = 无参运行工具本身进向导）。**该字段只用于打印提示，安装器绝不代为执行。**
-- **下载策略**（v1.15.0 起）：优先拉一次整仓 `tar.gz`（codeload）本地解包，
-  而不是逐文件下载 —— 逐文件的瓶颈是请求数 × RTT（每个 curl = 独立 TCP+TLS 连接，
-  xray-deploy 要 28 次，200ms RTT 上光握手就 ~17s；整仓 gzip 只有 ~280KB）。
-  整包失败（codeload 不可达 / 无 tar / 解包异常）会**自动回退**逐文件下载，行为与旧版一致。
-  `VPS_TOOLS_NO_TARBALL=1` 可强制走逐文件（逃生开关）。
+- **下载策略**（v1.20.0 起）：拉一次整仓 `tar.gz`（codeload）本地解包，按目录整拷工具目录
+  —— 这是**唯一**安装路径（逐文件下载已于 v1.20.0 移除）。好处是工具目录内的新文件
+  （新增 lib / 模板）自动带上，**不需要**在注册表里登记、也不需要升安装器版本。
+  逐文件的瓶颈是请求数 × RTT（xray-deploy 要 28 次，200ms RTT 上光握手就 ~17s；
+  整仓 gzip 只有 ~280KB）。
+  整包拿不到（codeload 不可达 / 无 tar / 解包异常）时安装**直接失败**并保持现有安装不动；
+  逃生办法：手动下载并解包仓库，然后
+  `VPS_TOOLS_TARBALL_ROOT=<解包后的仓库根> sudo -E bash install.sh install <tool>`。
 - 定时调度统一用 **systemd timer**（工具 `setup` 子命令管理），不使用 crontab
 - 重复 `install` = 覆盖更新，幂等
 
@@ -193,9 +196,13 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 | 套件 | 断言 | 说明 |
 |---|---|---|
 | `verify-vps-backup.sh` | 175 | vps-backup 回归（mock，无需 root/网络） |
-| `verify-nginx-install.sh` | 72 | nginx-install 回归（mock）⚠️ 1 既存 FAIL |
-| `verify-docker-install.sh` | 59 | docker-install 回归（mock） |
+| `verify-nginx-install.sh` | 72 | nginx-install 回归（mock） |
+| `verify-docker-install.sh` | 60 | docker-install 回归（mock） |
 | `verify-install-noexec.sh` | 72 | 安装器契约：**不自动执行工具命令** + 指引子命令真实性 + README 索引完整性（mock，离线可跑） |
+| `verify-install-tarball.sh` | 22 | 整包快照是唯一安装路径：1 次请求 / 失败即报错（不再回退逐文件）/ 手动注入逃生（mock） |
+| `verify-install-shared-core.sh` | 13 | 共享 `lib/core.sh` 跨目录安装 + 失败不破坏现有安装（mock） |
+| `verify-install-stale-tools-registry.sh` | 12 | 清单指纹兜底 + 自更新后重载清单 + 未登记的新增 lib 也到位（mock） |
+| `verify-install-no-ref.sh` | 24 | `--ref` / `VPS_TOOLS_REF` 已移除：立刻报错、0 次网络请求（mock） |
 | `verify-xray-deploy-routing.sh` | 56 | xray 分流规则 |
 | `verify-xray-deploy-warp.sh` | 128 | WARP 回国出站（profile 解析 / 出站形态 / 路由三态 / 私钥不外泄 / IPv6 裁剪 / endpoint 收敛 IPv4 / 内核 TUN 残留清理） |
 | `verify-xray-deploy-geo-timer.sh` | 55 | geo 数据每周自动更新（timer unit / systemctl 序列 / 原子替换与失败回滚） |
@@ -213,7 +220,6 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 | `verify-xray-deploy-split.sh` | — | 新增函数白名单 ⚠️ 既存 FAIL |
 
 > **已知既存失败**（与当前改动无关，记录在 `run-all.sh` 的 `KNOWN_FAIL`）：
-> `verify-nginx-install.sh`（1 断言：install_self 陈旧副本刷新）、
 > `verify-xray-deploy-all.sh`、`verify-xray-deploy-split.sh`。
 
 **约定**：每个套件必须**以 `[[ "$FAIL" -eq 0 ]]` 结尾**（或显式 `exit 1`），
@@ -261,7 +267,7 @@ bash tests/run-all.sh backup       # 只跑名字匹配 "backup" 的套件
 
 | 轴 | 版本来源 | tag 形式 | 什么时候递增 |
 |---|---|---|---|
-| 安装器 | `install.sh` 的 `VPS_TOOLS_VERSION` | `v1.14.0` | 改了安装器自身行为 / `TOOLS` 注册表 |
+| 安装器 | `install.sh` 的 `VPS_TOOLS_VERSION` | `v1.20.0` | 改了安装器自身行为 / `TOOLS` 元数据（**新增工具目录内文件不算**） |
 | 工具 | 各工具主脚本的版本变量（`VERSION` / `VP_VERSION` / …） | `vps-backup-v1.4.0` | 改了该工具 |
 
 发版（`scripts/release.sh` 自动读版本号 → 打 tag → 建 GitHub Release，notes 按路径过滤）：
@@ -276,22 +282,24 @@ bash scripts/release.sh --all --dry-run     # 只看要发什么，不写任何�
 脚本前置校验：工作区必须干净（dry-run 除外）、tag 不得已存在。发布后**回读 GitHub
 实际状态**复核（`gh release view`），不以 `gh` 自报成功为准。
 
-### 按版本安装 / 回滚
+### 版本策略（v1.20.0 起：只有 main，没有版本回退）
 
-`ref` = 分支名或 tag 名。安装时记录在 `/usr/local/lib/vps-tools/<tool>/.ref`，
-之后 `update` 默认沿用记录值 → **装过的版本会固定住**，不会被悄悄拉到最新。
+安装器与所有工具**始终跟 `main`**。`--ref` / `VPS_TOOLS_REF` / `.ref` 版本固定 /
+`self-update --ref` 回滚 / 逐文件回退下载**全部移除**（2026-11-08 用户决定）。
+
+原因：版本坐标一旦存在，就必须维护「版本号 ↔ 内容」一一对应（否则回滚拿到的东西不确定），
+结果是每次改 `install.sh` 都被迫升版，而实际只需要「装最新的」。
 
 ```bash
-sudo vps-tools install vps-backup --ref vps-backup-v1.4.0   # 装/回滚到指定版本
-sudo vps-tools update  vps-backup --ref main                # 回到最新
-sudo vps-tools self-update --ref v1.13.0                    # 安装器回滚
-VPS_TOOLS_REF=v1.14.0 sudo bash install.sh install vps-backup   # 全局覆盖（工具+安装器同一 ref）
-sudo vps-tools list                                         # 看已装版本与 ref
+sudo vps-tools install vps-backup    # 装/更新到 main
+sudo vps-tools list                  # 看已装版本（不再有 @ref）
 ```
 
-⚠️ `--ref` 用在 `install`/`update` 上**只影响该工具**；只有 `self-update --ref` 才改安装器自身
-（否则装个旧工具会连带把安装器降级）。显式 `--ref` 允许降级（回滚语义），
-不带 `--ref` 的 `self-update` 仍防降级。
+- 带 `--ref` 调用会**立刻报错**（`--ref 已于 v1.20.0 移除`），不会静默忽略。
+- `VPS_TOOLS_REF` 环境变量只告警，不改变安装结果。
+- 代价（已知并接受）：线上被 `main` 改坏时无法一键回到上个版本，只能等修复；
+  真要装历史版本：`git checkout <tag>` 后手工跑 `install.sh`。
+- tag 仍随发版打（`v<ver>` / `<tool>-v<ver>`），只作发布里程碑与 notes 锚点。
 
 ---
 
@@ -314,6 +322,16 @@ sudo vps-tools self-update        # 或：管理菜单选 5
 **变更（v1.8.0）**：安装/更新后**不再自动执行工具命令**（原先首次安装会自动调 `setup`）。
 安装器现在只打印下一步指引，配置与 systemd timer 由你显式运行 `sudo <tool> setup` 完成。
 
+**变更（v1.20.0，破坏性）：版本彻底解耦，移除 `--ref` 与逐文件回退**
+
+- 安装器与所有工具**始终跟 main**，整包快照是唯一安装路径。
+- 移除：`--ref` / `VPS_TOOLS_REF` / `.ref` 版本固定 / `self-update --ref` 回滚 /
+  逐文件回退下载（`VPS_TOOLS_NO_TARBALL` 一并移除）。
+- 收益：**新增/删除工具目录内的 lib、模板不再需要改 `install.sh`、不再需要升安装器版本**
+  （注册表第 6 字段只剩跨目录共享文件；整包按目录整拷自动带上）。
+- 逃生：整包拿不到时用 `VPS_TOOLS_TARBALL_ROOT=<已解包仓库根> sudo -E bash install.sh install <tool>`。
+- 回归见 `tests/verify-install-no-ref.sh`、`tests/verify-install-tarball.sh`。
+
 **修复（v1.18.0）：自更新后 re-exec，函数体与 TOOLS 清单同源**
 
 自更新把新 `install.sh` 落成管理命令后，旧实现只 `reload_tools_registry()` 重载 TOOLS **数据**，
@@ -329,5 +347,5 @@ sudo vps-tools self-update        # 或：管理菜单选 5
   （菜单会重新显示，`install/update <tool>` 会原样重跑）。
 - 防循环：`exec` 时注入 `VPS_TOOLS_REEXEC=1`，新进程靠 `VPS_TOOLS_SKIP_SELF_UPDATE=1`
   跳过自更新检查（省一次远端探测，也不会误报「已是最新」）；整包缓存经
-  `VPS_TOOLS_TARBALL_ROOT` 传递，不会为同一 ref 重复下载。
+  `VPS_TOOLS_TARBALL_CACHE` 传递，不会重复下载整包。
 - 回归见 `tests/verify-install-self-reexec.sh`（用 `BODY_MARKER_V2` 证明跑的是新函数体）。

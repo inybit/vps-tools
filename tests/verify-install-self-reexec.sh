@@ -49,6 +49,9 @@ STUB
 chmod +x "$MOCK/curl"
 export MOCK_CURL_LOG="$LOG"
 export PATH="$MOCK:$PATH"
+# 工具安装走整包快照（v1.20.0 起唯一路径）：直接注入本仓库树，离线且 0 次网络请求。
+# ⚠️ 只影响 install_tool；install_self 始终从 BASE_URL 拉（防注入树冒充远端最新）。
+export VPS_TOOLS_TARBALL_ROOT="$REPO"
 
 # ---------- 生成可非 root 运行的副本（版本可调） ----------
 mk_local_cmd() {  # $1=版本 $2=目标文件

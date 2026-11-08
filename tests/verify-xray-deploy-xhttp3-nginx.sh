@@ -65,8 +65,11 @@ ck "14) unit 含 RuntimeDirectory" \
   "$(grep -c '^RuntimeDirectory=' "${TOOL}/lib/service.sh")" "1"
 ck "入口 source 了新模块" \
   "$(grep -c 'LIB_DIR}/xhttp3.sh' "${MAIN}")" "1"
-ck "install.sh extra_files 含新模块" \
-  "$(grep -c 'proxy/xray-deploy/lib/xhttp3.sh' "${REPO}/install.sh")" "1"
+# v1.20.0 解耦：工具目录内模块不再登记（整包按目录整拷自动带上）
+ck "install.sh 不再登记工具目录内模块" \
+  "$(grep -c 'proxy/xray-deploy/lib/xhttp3.sh' "${REPO}/install.sh")" "0"
+ck "新模块确实在磁盘上（整包会带上）" \
+  "$([[ -f "${TOOL}/lib/xhttp3.sh" ]] && echo 1 || echo 0)" "1"
 echo
 
 # ---------- 生成器探针 ----------

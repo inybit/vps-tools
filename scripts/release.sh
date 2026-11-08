@@ -11,12 +11,13 @@
 #   --dry-run 只打印将要做的事，不写任何东西
 #
 # 版本语义（双轴，互不影响）:
-#   安装器版本 = install.sh 的 VPS_TOOLS_VERSION，改了安装器行为**或 TOOLS 清单**才递增
-#                （TOOLS 清单是本文件里的数据，改它 = 文件内容变了；同一版本号对应两份
-#                  不同内容会让 --ref 回滚拿到的东西不确定。守卫见
-#                  tests/verify-install-tools-version-bump.sh）
+#   安装器版本 = install.sh 的 VPS_TOOLS_VERSION，改了安装器行为**或 TOOLS 元数据**才递增
+#                （v1.20.0 起新增/删除工具目录内文件**不需要**升版：整包按目录整拷。
+#                 守卫见 tests/verify-install-tools-version-bump.sh）
 #   工具版本   = 各工具主脚本里的 VERSION 变量，改了该工具才递增
 #   发布哪个轴就打哪个轴的 tag，另一个轴不动。
+#   注意：v1.20.0 起 tag 只是发布里程碑 —— 安装器与工具始终跟 main，
+#         不再支持 `install --ref <tag>` 按版本安装/回滚。
 #
 # 退出码: 0 = 全部成功；1 = 有失败（脚本会明确说是哪一步）
 # ============================================================
@@ -106,7 +107,7 @@ notes_for() {  # $1=target $2=tag $3...=路径
     echo "_（该范围内无涉及此路径的提交）_"
   fi
   echo
-  echo "安装/回滚: \`vps-tools install <tool> --ref ${tag}\`"
+  echo "安装/更新: \`vps-tools install <tool>\`（v1.20.0 起始终跟 main）"
 }
 
 # ---------- 发一个 target ----------
